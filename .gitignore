@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+*.egg-info/
+build/
+dist/
+
+# Runtime data
+*.db
+*.db-shm
+*.db-wal
+data/events/*.jsonl
+data/evidence_packs/*
+data/reports/*
+!data/events/.gitkeep
+!data/artifacts/.gitkeep
+data/captures/*
+!data/captures/.gitkeep
+!data/evidence_packs/.gitkeep
+!data/reports/.gitkeep
+
+# Local config
+.env
+
+# Downloaded model weights
+models/object_detection/*.onnx
+!models/object_detection/.gitkeep
+results/models/*
+!results/models/.gitkeep

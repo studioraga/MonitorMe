@@ -1,0 +1,234 @@
+from __future__ import annotations
+
+import argparse
+import json
+
+from .assistant import MonitorMeAssistant
+from .camera_devices import camera_start_hint, list_video_devices
+from .db import MonitorMeDB
+from .detector_health import check_detector_health
+from .evidence_pack import EvidencePackBuilder
+from .local_capture import LocalCameraCaptureRunner, LocalCaptureConfig
+from .model_registry import register_default_models
+from .report_tools import IncidentReportBuilder
+from .tracker_tools import TrackerTools
+
+
+def _db(args: argparse.Namespace) -> MonitorMeDB:
+    return MonitorMeDB(args.db)
+
+
+def cmd_camera_devices(args: argparse.Namespace) -> int:
+    devices = list_video_devices(probe=args.probe)
+    print(json.dumps({"ok": True, "devices": devices, "count": len(devices), "hint": camera_start_hint(devices)}, indent=2, sort_keys=True))
+    return 0
+
+
+
+def cmd_detector_health(args: argparse.Namespace) -> int:
+    result = check_detector_health(
+        model_path=args.model_path,
+        model_id=args.model_id,
+        expected_sha256=args.sha256 or None,
+        load_model=not args.skip_load,
+    )
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0 if result.get("ok") else (0 if args.allow_unhealthy else 3)
+
+
+def cmd_init_db(args: argparse.Namespace) -> int:
+    db = _db(args)
+    register_default_models(db)
+    print(json.dumps({"ok": True, "db": str(db.db_path), "models": db.list_models()}, indent=2, sort_keys=True))
+    db.close()
+    return 0
+
+
+def cmd_capture_run(args: argparse.Namespace) -> int:
+    db = _db(args)
+    config = LocalCaptureConfig(
+        camera_id=args.camera_id,
+        device=args.device,
+        width=args.width,
+        height=args.height,
+        fps=args.fps,
+        fourcc=args.fourcc,
+        duration_sec=args.duration_sec,
+        max_frames=args.max_frames,
+        motion_threshold=args.motion_threshold,
+        motion_pixel_threshold=args.motion_pixel_threshold,
+        min_event_gap_sec=args.min_event_gap_sec,
+        data_root=args.data_root,
+        detector_enabled=args.detector_enabled,
+        detector_model_id=args.detector_model_id,
+        detector_model_path=args.detector_model_path,
+        detector_conf_threshold=args.detector_conf_threshold,
+        detector_iou_threshold=args.detector_iou_threshold,
+        detector_max_detections=args.detector_max_detections,
+        detector_input_size=args.detector_input_size,
+        overlay_enabled=not args.no_overlays,
+        overlay_dir_name=args.overlay_dir_name,
+    )
+    result = LocalCameraCaptureRunner(db, config).run().as_dict()
+    print(json.dumps(result, indent=2, sort_keys=True))
+    db.close()
+    return 0 if result.get("ok") else 2
+
+
+def cmd_events(args: argparse.Namespace) -> int:
+    db = _db(args)
+    result = db.list_events(camera_id=args.camera_id, event_type=args.event_type, label=args.label, session_id=args.session_id, limit=args.limit)
+    print(json.dumps({"events": result, "count": len(result)}, indent=2, sort_keys=True))
+    db.close()
+    return 0
+
+
+
+def cmd_artifacts(args: argparse.Namespace) -> int:
+    db = _db(args)
+    result = db.list_artifacts(
+        session_id=args.session_id,
+        camera_id=args.camera_id,
+        event_id=args.event_id,
+        artifact_type=args.artifact_type,
+    )[: args.limit]
+    print(json.dumps({"artifacts": result, "count": len(result)}, indent=2, sort_keys=True))
+    db.close()
+    return 0
+
+def cmd_ask(args: argparse.Namespace) -> int:
+    db = _db(args)
+    assistant = MonitorMeAssistant(db)
+    result = assistant.ask(args.question, camera_id=args.camera_id, limit=args.limit, use_llm=args.use_llm)
+    print(json.dumps({"run_id": result.run_id, "answer": result.answer, "evidence": result.evidence, "limits": result.limits}, indent=2, sort_keys=True))
+    db.close()
+    return 0
+
+
+def cmd_evidence_pack(args: argparse.Namespace) -> int:
+    db = _db(args)
+    result = EvidencePackBuilder(db, root=args.output_root).build_for_event(args.event_id)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    db.close()
+    return 0
+
+
+def cmd_incident_report(args: argparse.Namespace) -> int:
+    db = _db(args)
+    result = IncidentReportBuilder(db, reports_root=args.reports_root, evidence_root=args.evidence_root).build(
+        event_ids=args.event_id,
+        title=args.title,
+        severity=args.severity,
+    )
+    print(json.dumps(result, indent=2, sort_keys=True))
+    db.close()
+    return 0
+
+
+def cmd_feedback(args: argparse.Namespace) -> int:
+    db = _db(args)
+    feedback_id = TrackerTools(db).mark_event(args.event_id, label=args.label, reason=args.reason, operator=args.operator)
+    print(json.dumps({"feedback_id": feedback_id, "event_id": args.event_id, "label": args.label}, indent=2, sort_keys=True))
+    db.close()
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="monitorme", description="MonitorMe Node1 real C922 Local Evidence Assistant v0.1.9")
+    parser.add_argument("--db", default="data/events/monitorme.db", help="SQLite DB path")
+    sub = parser.add_subparsers(required=True)
+
+    p = sub.add_parser("camera-devices", help="List local /dev/video* camera devices")
+    p.add_argument("--probe", action="store_true", help="Run v4l2-ctl --list-formats-ext when available")
+    p.set_defaults(func=cmd_camera_devices)
+
+    p = sub.add_parser("init-db", help="Apply migrations and register default model metadata")
+    p.set_defaults(func=cmd_init_db)
+
+    p = sub.add_parser("detector-health", help="Validate local YOLO ONNX detector model/runtime without opening camera")
+    p.add_argument("--model-id", default="yolo11n-coco-onnx")
+    p.add_argument("--model-path", default="models/object_detection/yolo11n.onnx")
+    p.add_argument("--sha256", default="", help="Optional expected model SHA-256")
+    p.add_argument("--skip-load", action="store_true", help="Check file/hash/runtime metadata without loading the ONNX session")
+    p.add_argument("--allow-unhealthy", action="store_true", help="Return exit 0 even if health is not OK; useful for reports")
+    p.set_defaults(func=cmd_detector_health)
+
+    p = sub.add_parser("capture-run", help="Run a real bounded Node1 local camera capture from /dev/video0")
+    p.add_argument("--camera-id", default="c922_node1_gate")
+    p.add_argument("--device", default="/dev/video0")
+    p.add_argument("--width", type=int, default=1280)
+    p.add_argument("--height", type=int, default=720)
+    p.add_argument("--fps", type=int, default=30)
+    p.add_argument("--fourcc", default="MJPG")
+    p.add_argument("--duration-sec", type=float, default=10.0)
+    p.add_argument("--max-frames", type=int)
+    p.add_argument("--motion-threshold", type=float, default=1.5, help="Percent of changed pixels required to emit motion event")
+    p.add_argument("--motion-pixel-threshold", type=int, default=30, help="Pixel-difference threshold 1..255")
+    p.add_argument("--min-event-gap-sec", type=float, default=2.0)
+    p.add_argument("--data-root", default="data")
+    p.add_argument("--detector-enabled", action="store_true", help="Run real YOLO ONNX detection after motion gate")
+    p.add_argument("--detector-model-id", default="yolo11n-coco-onnx")
+    p.add_argument("--detector-model-path", default="models/object_detection/yolo11n.onnx")
+    p.add_argument("--detector-conf-threshold", type=float, default=0.35)
+    p.add_argument("--detector-iou-threshold", type=float, default=0.45)
+    p.add_argument("--detector-max-detections", type=int, default=20)
+    p.add_argument("--detector-input-size", type=int, default=640)
+    p.add_argument("--no-overlays", action="store_true", help="Disable Step 17E annotated keyframe overlays")
+    p.add_argument("--overlay-dir-name", default="overlays", help="Session subdirectory for annotated keyframe overlays")
+    p.set_defaults(func=cmd_capture_run)
+
+    p = sub.add_parser("events", help="List normalized events")
+    p.add_argument("--camera-id")
+    p.add_argument("--event-type")
+    p.add_argument("--label")
+    p.add_argument("--session-id")
+    p.add_argument("--limit", type=int, default=50)
+    p.set_defaults(func=cmd_events)
+
+
+    p = sub.add_parser("artifacts", help="List capture/evidence artifacts")
+    p.add_argument("--session-id")
+    p.add_argument("--camera-id")
+    p.add_argument("--event-id")
+    p.add_argument("--artifact-type")
+    p.add_argument("--limit", type=int, default=50)
+    p.set_defaults(func=cmd_artifacts)
+
+    p = sub.add_parser("ask", help="Ask a DB-grounded MonitorMe question")
+    p.add_argument("question")
+    p.add_argument("--camera-id")
+    p.add_argument("--limit", type=int, default=100)
+    p.add_argument("--use-llm", action="store_true", help="Allow configured LLM summary if fact guard accepts it")
+    p.set_defaults(func=cmd_ask)
+
+    p = sub.add_parser("evidence-pack", help="Build an evidence pack for an event")
+    p.add_argument("event_id")
+    p.add_argument("--output-root", default="data/evidence_packs")
+    p.set_defaults(func=cmd_evidence_pack)
+
+    p = sub.add_parser("incident-report", help="Build an incident report from one or more event ids")
+    p.add_argument("--event-id", action="append", required=True)
+    p.add_argument("--title")
+    p.add_argument("--severity", default="info")
+    p.add_argument("--reports-root", default="data/reports")
+    p.add_argument("--evidence-root", default="data/evidence_packs")
+    p.set_defaults(func=cmd_incident_report)
+
+    p = sub.add_parser("feedback", help="Mark an event useful/false-positive/etc")
+    p.add_argument("event_id")
+    p.add_argument("--label", required=True, choices=["useful", "false_positive", "needs_review", "duplicate", "bad_bbox", "wrong_label"])
+    p.add_argument("--reason", default="")
+    p.add_argument("--operator", default="operator")
+    p.set_defaults(func=cmd_feedback)
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    return int(args.func(args))
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(main())
