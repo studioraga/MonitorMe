@@ -3,6 +3,7 @@ from typing import Any
 
 from . import __version__
 from .assistant import MonitorMeAssistant
+from .assistant_summary import AssistantSummaryService
 from .camera_devices import camera_start_hint, list_video_devices
 from .db import MonitorMeDB
 from .detector_health import check_detector_health
@@ -30,6 +31,7 @@ def create_app(db_path: str | None = None):
     evidence_builder = EvidencePackBuilder(db)
     report_builder = IncidentReportBuilder(db)
     trackers = TrackerTools(db)
+    summary_service = AssistantSummaryService(db)
 
     class AskRequest(BaseModel):
         question: str
@@ -91,6 +93,9 @@ def create_app(db_path: str | None = None):
                 "events": "GET /events",
                 "artifacts": "GET /artifacts",
                 "ask": "POST /assistant/ask",
+                "assistant_summary": "POST /assistant/events/{event_id}/summary",
+                "assistant_summaries": "GET /assistant/summaries",
+                "event_contracts": "GET /assistant/event-contracts",
                 "evidence_pack": "POST /assistant/events/{event_id}/evidence-pack",
                 "incident_report": "POST /assistant/reports/incident",
                 "feedback": "POST /events/{event_id}/feedback",
@@ -102,6 +107,7 @@ def create_app(db_path: str | None = None):
                 "object_labels_fabricated": False,
                 "step17c_yolo_onnx_after_motion_gate": True,
                 "step17e_evidence_overlays": True,
+                "node1_ai_camera_assistant_v0_1": True,
             },
         }
 
@@ -176,6 +182,23 @@ def create_app(db_path: str | None = None):
     def ask(req: AskRequest = Body(...)) -> dict[str, Any]:
         answer = assistant.ask(req.question, camera_id=req.camera_id, limit=req.limit, use_llm=req.use_llm)
         return {"run_id": answer.run_id, "answer": answer.answer, "evidence": answer.evidence, "limits": answer.limits}
+
+    @app.post("/assistant/events/{event_id}/summary")
+    def assistant_event_summary(event_id: str) -> dict[str, Any]:
+        try:
+            return summary_service.summarize_event(event_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/assistant/summaries")
+    def assistant_summaries(event_id: str | None = None, session_id: str | None = None, camera_id: str | None = None, limit: int = 100) -> dict[str, Any]:
+        items = db.list_summaries(event_id=event_id, session_id=session_id, camera_id=camera_id, limit=limit)
+        return {"summaries": items, "count": len(items)}
+
+    @app.get("/assistant/event-contracts")
+    def assistant_event_contracts(event_id: str | None = None, session_id: str | None = None, camera_id: str | None = None, limit: int = 100) -> dict[str, Any]:
+        items = db.list_event_contracts(event_id=event_id, session_id=session_id, camera_id=camera_id, limit=limit)
+        return {"event_contracts": items, "count": len(items)}
 
     @app.post("/events/{event_id}/feedback")
     def feedback(event_id: str, req: FeedbackRequest = Body(...)) -> dict[str, Any]:

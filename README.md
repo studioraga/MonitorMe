@@ -386,3 +386,66 @@ python -m monitor_me.cli --db data/events/monitorme.db artifacts \
   --artifact-type annotated_keyframe \
   --limit 20
 ```
+
+
+## Node1 AI Camera Assistant v0.1
+
+MonitorMe now has the first formal **Node1 AI Camera Assistant** layer on top of the local C922 + YOLO evidence pipeline. This milestone keeps the model split intentionally strict:
+
+```text
+YOLO11n ONNX              = fast visual facts: labels, confidence, bbox, frame_id
+Node1 deterministic policy = actions: record only, review capture, bounded severity
+Assistant summary service  = safe operator text from stored SQLite evidence
+Gemma/MAX                  = next milestone, explanation only, not raw vision
+VLM/SAM/GroundingDINO/CLIP = later evidence-enrichment layers after trigger
+```
+
+Runtime flow:
+
+```text
+C922 /dev/video0
+  -> motion gate
+  -> YOLO ONNX on motion keyframe
+  -> motion_detected parent event
+  -> object_detected child events
+  -> event_contracts row
+  -> deterministic policy_decision_json
+  -> assistant_summaries row
+  -> /assistant/ask over event DB
+  -> incident report / evidence pack
+```
+
+New implementation files:
+
+```text
+monitor_me/yolo_client.py          # visual-facts client boundary
+monitor_me/event_contract.py       # strict Node1 event contract builder
+monitor_me/capture_policy.py       # deterministic Node1 action/severity policy
+monitor_me/assistant_summary.py    # automatic DB-grounded summaries
+migrations/002_node1_assistant_v01.sql
+tests/test_node1_ai_camera_assistant_v01.py
+docs/NODE1_AI_CAMERA_ASSISTANT_V0_1.md
+```
+
+New validation:
+
+```bash
+./scripts/validate_node1_ai_camera_assistant_v01.sh
+```
+
+Useful post-validation commands:
+
+```bash
+python -m monitor_me.cli --db data/events/monitorme.db summaries --limit 20
+python -m monitor_me.cli --db data/events/monitorme.db event-contracts --limit 20
+python -m monitor_me.cli --db data/events/monitorme.db ask "What person events happened today?"
+```
+
+Use `sqlite3`, not `cat`, to inspect the SQLite DB:
+
+```bash
+sqlite3 data/events/monitorme.db ".tables"
+sqlite3 data/events/monitorme.db "select event_type,label,count(*) from events group by event_type,label;"
+```
+
+See `docs/NODE1_AI_CAMERA_ASSISTANT_V0_1.md` and `docs/NODE1_AI_CAMERA_ASSISTANT_VALIDATION.md`.

@@ -22,3 +22,30 @@ Expected physical output:
 - real keyframe artifacts under `data/captures/<session_id>/keyframes/` if motion is detected;
 - real `motion_detected` event rows;
 - assistant answer containing `event_id`, `session_id`, and `frame_id`.
+
+## Node1 AI Camera Assistant v0.1 validation result
+
+Package-level validation passed in the sandbox:
+
+```text
+./scripts/validate_node1_ai_camera_assistant_v01.sh
+10 passed
+```
+
+Full pytest passed:
+
+```text
+27 passed
+```
+
+The uploaded Node1 runtime database also showed that live validation produced MonitorMe assistant data:
+
+```text
+events: 9
+assistant_summaries: 11
+event_contracts: 9
+capture_artifacts: 9
+artifact types: keyframe, annotated_keyframe, capture_manifest
+```
+
+Use `sqlite3` for database inspection. Do not use `cat data/events/monitorme.db` because the database is binary.

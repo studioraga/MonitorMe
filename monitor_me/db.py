@@ -558,6 +558,82 @@ class MonitorMeDB:
             self.audit("assistant.summary.create", camera_id=camera_id, event_id=event_id, session_id=session_id, details={"summary_id": summary_id})
             return summary_id
 
+
+    def record_event_contract(
+        self,
+        *,
+        event_id: str,
+        camera_id: str,
+        contract: dict[str, Any],
+        policy_decision: dict[str, Any],
+        parent_event_id: str | None = None,
+        session_id: str | None = None,
+        schema_version: str = "1.0",
+    ) -> str:
+        with self._lock:
+            contract_id = new_id("ctr")
+            self.conn.execute(
+                """
+                INSERT INTO event_contracts(contract_id, event_id, parent_event_id, session_id, camera_id,
+                                            schema_version, contract_json, policy_decision_json, created_at)
+                VALUES(?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    contract_id,
+                    event_id,
+                    parent_event_id,
+                    session_id,
+                    camera_id,
+                    schema_version,
+                    self._json(contract),
+                    self._json(policy_decision),
+                    now_iso(),
+                ),
+            )
+            self.conn.commit()
+            self.audit(
+                "event_contract.create",
+                camera_id=camera_id,
+                event_id=event_id,
+                session_id=session_id,
+                details={"contract_id": contract_id, "policy_action": policy_decision.get("action")},
+            )
+            return contract_id
+
+    def latest_event_contract(self, event_id: str) -> dict[str, Any] | None:
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM event_contracts WHERE event_id=? ORDER BY created_at DESC LIMIT 1",
+                (event_id,),
+            ).fetchone()
+            return self._decode_row(row)
+
+    def list_event_contracts(self, *, event_id: str | None = None, session_id: str | None = None, camera_id: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+        with self._lock:
+            sql = "SELECT * FROM event_contracts WHERE 1=1"
+            args: list[Any] = []
+            if event_id:
+                sql += " AND event_id=?"; args.append(event_id)
+            if session_id:
+                sql += " AND session_id=?"; args.append(session_id)
+            if camera_id:
+                sql += " AND camera_id=?"; args.append(camera_id)
+            sql += " ORDER BY created_at DESC LIMIT ?"; args.append(limit)
+            return self._decode_rows(self.conn.execute(sql, args))
+
+    def list_summaries(self, *, event_id: str | None = None, session_id: str | None = None, camera_id: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+        with self._lock:
+            sql = "SELECT * FROM assistant_summaries WHERE 1=1"
+            args: list[Any] = []
+            if event_id:
+                sql += " AND event_id=?"; args.append(event_id)
+            if session_id:
+                sql += " AND session_id=?"; args.append(session_id)
+            if camera_id:
+                sql += " AND camera_id=?"; args.append(camera_id)
+            sql += " ORDER BY created_at DESC LIMIT ?"; args.append(limit)
+            return self._decode_rows(self.conn.execute(sql, args))
+
     def create_feedback(self, event_id: str, *, label: str, reason: str = "", operator: str = "operator") -> str:
         with self._lock:
             event = self.get_event(event_id)

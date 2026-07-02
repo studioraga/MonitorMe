@@ -68,3 +68,29 @@ report path
 ```
 
 Unsupported questions should return a clear evidence limit instead of speculation.
+
+## Node1 AI Camera Assistant v0.1 architecture
+
+```text
+C922 /dev/video0
+  -> local_capture.py
+  -> motion gate
+  -> yolo_client.py / yolo_onnx.py
+  -> events table
+  -> capture_artifacts table
+  -> event_contract.py
+  -> capture_policy.py
+  -> event_contracts table
+  -> assistant_summary.py
+  -> assistant_summaries table
+  -> assistant.py / report_tools.py / evidence_pack.py
+```
+
+The architecture intentionally separates model responsibilities:
+
+```text
+YOLO ONNX: visual facts only
+Node1 policy: deterministic action/severity decision
+Assistant summary: safe local text over stored facts
+Gemma/MAX v0.2: optional explanation layer over event contracts, not raw frames
+```

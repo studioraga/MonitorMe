@@ -58,3 +58,56 @@ MonitorMe v0.1.8 adds `python -m monitor_me.cli detector-health` and `GET /model
 ```
 
 This validates that annotated overlay artifacts are generated from normalized `object_detected` rows while raw keyframes remain unchanged.
+
+## Node1 AI Camera Assistant v0.1 validation
+
+Install the base validation dependencies:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -U pip
+python -m pip install -e '.[api,camera,test]'
+```
+
+Run the offline assistant milestone validation:
+
+```bash
+./scripts/validate_node1_ai_camera_assistant_v01.sh
+```
+
+Expected:
+
+```text
+=== MonitorMe Node1 AI Camera Assistant v0.1 validation PASSED ===
+```
+
+Then run live C922 + YOLO validation on Node1:
+
+```bash
+./scripts/models/download_yolo_onnx.sh
+python -m pip install -e '.[api,camera,detector,test]'
+./scripts/validate_node1_c922_yolo_live.sh
+```
+
+The live validation should produce:
+
+```text
+motion_detected rows
+object_detected rows when YOLO detects objects
+keyframe artifacts
+overlay artifacts
+assistant_summaries rows
+event_contracts rows
+```
+
+Inspect the SQLite database with `sqlite3`, not `cat`:
+
+```bash
+sqlite3 data/events/monitorme.db ".tables"
+sqlite3 data/events/monitorme.db "select event_type,label,count(*) from events group by event_type,label;"
+sqlite3 data/events/monitorme.db "select count(*) from assistant_summaries;"
+sqlite3 data/events/monitorme.db "select count(*) from event_contracts;"
+```
+
+See `docs/NODE1_AI_CAMERA_ASSISTANT_VALIDATION.md` for the full validation sequence.

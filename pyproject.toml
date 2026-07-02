@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "monitorme"
-version = "0.1.9"
-description = "MonitorMe Node1 real C922 local evidence assistant with YOLO detections, detector health, and evidence overlays"
+version = "0.2.0"
+description = "MonitorMe Node1 AI Camera Assistant v0.1 with YOLO visual facts, deterministic policy, event contracts, and automatic summaries"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}

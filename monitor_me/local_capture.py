@@ -6,6 +6,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable, Protocol
 
+from .assistant_summary import AssistantSummaryService
 from .db import MonitorMeDB
 from .hash_utils import sha256_file
 from .model_registry import register_default_models
@@ -91,6 +92,8 @@ class LocalCaptureResult:
     artifact_paths: list[str]
     overlay_artifact_ids: list[str]
     overlay_paths: list[str]
+    assistant_summary_ids: list[str]
+    event_contract_ids: list[str]
     started_at: str
     ended_at: str
     detector: dict[str, Any]
@@ -289,6 +292,9 @@ class LocalCameraCaptureRunner:
         artifact_paths: list[str] = []
         overlay_artifact_ids: list[str] = []
         overlay_paths: list[str] = []
+        assistant_summary_ids: list[str] = []
+        event_contract_ids: list[str] = []
+        summary_service = AssistantSummaryService(self.db)
         manifest_frames: list[dict[str, Any]] = []
         last_event_time = 0.0
         error: str | None = None
@@ -413,6 +419,25 @@ class LocalCameraCaptureRunner:
                             },
                         )
 
+                    try:
+                        summary_results = summary_service.summarize_event_group(motion_id, child_ids)
+                        for item in summary_results:
+                            if item.get("summary_id"):
+                                assistant_summary_ids.append(str(item["summary_id"]))
+                            # Pick up contracts created for this event from the DB.
+                            latest_contract = self.db.latest_event_contract(str((item.get("event_contract") or {}).get("event_id") or ""))
+                            if latest_contract and latest_contract.get("contract_id"):
+                                event_contract_ids.append(str(latest_contract["contract_id"]))
+                    except Exception as exc:
+                        self.db.audit(
+                            "assistant.summary.auto_create_failed",
+                            outcome="warning",
+                            camera_id=cfg.camera_id,
+                            event_id=motion_id,
+                            session_id=session_id,
+                            details={"error": str(exc), "object_event_ids": child_ids},
+                        )
+
                     manifest_frames.append(
                         {
                             "frame_id": frame_id,
@@ -456,6 +481,8 @@ class LocalCameraCaptureRunner:
             "artifact_ids": artifact_ids,
             "overlay_artifact_ids": overlay_artifact_ids,
             "overlay_paths": overlay_paths,
+            "assistant_summary_ids": assistant_summary_ids,
+            "event_contract_ids": event_contract_ids,
             "detector": detector_status,
             "policy_decision": policy,
             "privacy": {"external_upload": False, "face_recognition": False, "raw_frame_upload": False},
@@ -494,7 +521,7 @@ class LocalCameraCaptureRunner:
                 "camera.capture.completed",
                 camera_id=cfg.camera_id,
                 session_id=session_id,
-                details={"frames_seen": frames_seen, "motion_events": len(motion_event_ids), "object_events": len(object_event_ids)},
+                details={"frames_seen": frames_seen, "motion_events": len(motion_event_ids), "object_events": len(object_event_ids), "assistant_summaries": len(assistant_summary_ids)},
             )
         return LocalCaptureResult(
             ok=ok,
@@ -511,6 +538,8 @@ class LocalCameraCaptureRunner:
             artifact_paths=artifact_paths,
             overlay_artifact_ids=overlay_artifact_ids,
             overlay_paths=overlay_paths,
+            assistant_summary_ids=assistant_summary_ids,
+            event_contract_ids=event_contract_ids,
             started_at=started_at,
             ended_at=ended_at,
             detector=detector_status,

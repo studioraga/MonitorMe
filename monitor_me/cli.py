@@ -4,6 +4,7 @@ import argparse
 import json
 
 from .assistant import MonitorMeAssistant
+from .assistant_summary import AssistantSummaryService
 from .camera_devices import camera_start_hint, list_video_devices
 from .db import MonitorMeDB
 from .detector_health import check_detector_health
@@ -105,6 +106,30 @@ def cmd_ask(args: argparse.Namespace) -> int:
     return 0
 
 
+
+def cmd_assistant_summarize_event(args: argparse.Namespace) -> int:
+    db = _db(args)
+    result = AssistantSummaryService(db).summarize_event(args.event_id)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    db.close()
+    return 0 if result.get("status") == "completed" else 3
+
+
+def cmd_summaries(args: argparse.Namespace) -> int:
+    db = _db(args)
+    items = db.list_summaries(event_id=args.event_id, session_id=args.session_id, camera_id=args.camera_id, limit=args.limit)
+    print(json.dumps({"summaries": items, "count": len(items)}, indent=2, sort_keys=True))
+    db.close()
+    return 0
+
+
+def cmd_event_contracts(args: argparse.Namespace) -> int:
+    db = _db(args)
+    items = db.list_event_contracts(event_id=args.event_id, session_id=args.session_id, camera_id=args.camera_id, limit=args.limit)
+    print(json.dumps({"event_contracts": items, "count": len(items)}, indent=2, sort_keys=True))
+    db.close()
+    return 0
+
 def cmd_evidence_pack(args: argparse.Namespace) -> int:
     db = _db(args)
     result = EvidencePackBuilder(db, root=args.output_root).build_for_event(args.event_id)
@@ -134,7 +159,7 @@ def cmd_feedback(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="monitorme", description="MonitorMe Node1 real C922 Local Evidence Assistant v0.1.9")
+    parser = argparse.ArgumentParser(prog="monitorme", description="MonitorMe Node1 AI Camera Assistant v0.1")
     parser.add_argument("--db", default="data/events/monitorme.db", help="SQLite DB path")
     sub = parser.add_subparsers(required=True)
 
@@ -200,6 +225,24 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, default=100)
     p.add_argument("--use-llm", action="store_true", help="Allow configured LLM summary if fact guard accepts it")
     p.set_defaults(func=cmd_ask)
+
+    p = sub.add_parser("assistant-summarize-event", help="Create a deterministic assistant summary/event contract for an event")
+    p.add_argument("event_id")
+    p.set_defaults(func=cmd_assistant_summarize_event)
+
+    p = sub.add_parser("summaries", help="List assistant summaries")
+    p.add_argument("--event-id")
+    p.add_argument("--session-id")
+    p.add_argument("--camera-id")
+    p.add_argument("--limit", type=int, default=50)
+    p.set_defaults(func=cmd_summaries)
+
+    p = sub.add_parser("event-contracts", help="List Node1 AI camera event contracts")
+    p.add_argument("--event-id")
+    p.add_argument("--session-id")
+    p.add_argument("--camera-id")
+    p.add_argument("--limit", type=int, default=50)
+    p.set_defaults(func=cmd_event_contracts)
 
     p = sub.add_parser("evidence-pack", help="Build an evidence pack for an event")
     p.add_argument("event_id")

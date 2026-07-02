@@ -60,3 +60,17 @@ Status: implemented in this repository.
 MonitorMe v0.1.8 adds `python -m monitor_me.cli detector-health` and `GET /models/detector/health` so Node1 can validate the YOLO ONNX model path, checksum, ONNX Runtime providers, and model input/output metadata before live camera capture. See `docs/STEP17D_DETECTOR_HEALTH.md`.
 
 - Step 17E: evidence visualization overlays with raw-keyframe preservation.
+
+## Node1 AI Camera Assistant roadmap
+
+```text
+v0.1  event contracts, deterministic policy, automatic summaries, non-invention tests
+v0.2  Gemma/MAX client, strict JSON prompt/output validation, fallback summaries
+v0.3  Qwen VLM keyframe analysis after YOLO/motion trigger
+v0.4  SmolVLM2 short clip experiments
+v0.5  SAM 2 crops/masks from YOLO boxes
+v0.6  Grounding DINO after trigger for open-vocabulary detections
+v0.7  CLIP/SigLIP visual search over stored evidence
+```
+
+v0.1 is intentionally LLM-free. It creates the structured facts and deterministic policy layer that Gemma/MAX will consume in v0.2.

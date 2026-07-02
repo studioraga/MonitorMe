@@ -12,6 +12,7 @@ LABEL_ALIASES = {
     "motion": {"motion", "movement"},
     "chair": {"chair", "chairs"},
     "bed": {"bed", "beds"},
+    "guitar": {"guitar", "guitars", "instrument", "musical instrument"},
 }
 
 OBJECT_WORDS = {"object", "objects", "detected", "detection", "detections", "yolo"}
@@ -133,6 +134,8 @@ def build_evidence_refs(db: MonitorMeDB, events: list[dict[str, Any]]) -> list[d
         session = db.get_session(event.get("session_id")) if event.get("session_id") else None
         artifacts = db.list_artifacts(session_id=event.get("session_id")) if event.get("session_id") else []
         audits = db.recent_audit(event_id=event.get("event_id"), session_id=event.get("session_id"), limit=10)
+        summaries = db.list_summaries(event_id=event.get("event_id"), limit=1)
+        contracts = db.list_event_contracts(event_id=event.get("event_id"), limit=1)
         evidence.append(
             {
                 "event_id": event.get("event_id"),
@@ -148,6 +151,8 @@ def build_evidence_refs(db: MonitorMeDB, events: list[dict[str, Any]]) -> list[d
                 "artifact_paths": [a.get("path") for a in artifacts if a.get("path")],
                 "policy_decision": (session or {}).get("policy_decision", {}),
                 "audit_ids": [a.get("audit_id") for a in audits if a.get("audit_id")],
+                "assistant_summary": summaries[0] if summaries else None,
+                "event_contract": contracts[0] if contracts else None,
                 "ts": event.get("ts"),
             }
         )

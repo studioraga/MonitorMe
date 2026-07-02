@@ -62,3 +62,63 @@ report.md
 ```
 
 The manifest records file sizes and SHA-256 hashes.
+
+## Node1 AI Camera Assistant v0.1 evidence additions
+
+Assistant v0.1 adds two important evidence-backed tables.
+
+### event_contracts
+
+`event_contracts` stores the strict JSON contract used by the assistant and, later, by Gemma/MAX.
+
+```text
+event_id
+parent_event_id
+session_id
+camera_id
+schema_version
+contract_json
+policy_decision_json
+created_at
+```
+
+Conceptual flow:
+
+```text
+normalized events + artifacts
+  -> event contract builder
+  -> policy decision
+  -> event_contracts row
+```
+
+### assistant_summaries
+
+`assistant_summaries` stores local operator-facing text generated from the event contract and deterministic policy result.
+
+```text
+summary_id
+run_id
+event_id
+session_id
+camera_id
+summary_text
+facts_json
+source_refs_json
+model_id
+status
+created_at
+```
+
+In v0.1, `model_id` is deterministic. Gemma/MAX integration is deferred to v0.2.
+
+Evidence relationship:
+
+```text
+motion_detected event
+  + object_detected children
+  + keyframe/overlay/manifest artifacts
+  + policy_decision_json
+  -> assistant_summaries.summary_text
+```
+
+The summary is not treated as primary evidence. Primary evidence remains the normalized events, artifacts, SHA-256 hashes, and audit trail.

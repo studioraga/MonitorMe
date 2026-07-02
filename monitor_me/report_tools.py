@@ -33,7 +33,10 @@ class IncidentReportBuilder:
         report_id = new_id("ir")
         title = title or f"MonitorMe incident report for {camera_id}"
         path = self.reports_root / f"{report_id}.md"
-        content = self._render(report_id, title, severity, valid_events, session_ids, pack_ids)
+        summaries = []
+        for eid in event_ids:
+            summaries.extend(self.db.list_summaries(event_id=eid, limit=3))
+        content = self._render(report_id, title, severity, valid_events, session_ids, pack_ids, summaries)
         path.write_text(content, encoding="utf-8")
         self.db.create_incident_report(
             report_id=report_id,
@@ -50,7 +53,7 @@ class IncidentReportBuilder:
         return {"report_id": report_id, "report_path": str(path), "evidence_pack_ids": pack_ids, "session_ids": session_ids}
 
     @staticmethod
-    def _render(report_id: str, title: str, severity: str, events: list[dict[str, Any]], session_ids: list[str], pack_ids: list[str]) -> str:
+    def _render(report_id: str, title: str, severity: str, events: list[dict[str, Any]], session_ids: list[str], pack_ids: list[str], summaries: list[dict[str, Any]] | None = None) -> str:
         lines = [
             f"# {title}",
             "",
@@ -67,6 +70,12 @@ class IncidentReportBuilder:
                 f"- event_id=`{event.get('event_id')}` session_id=`{event.get('session_id')}` frame_id=`{event.get('frame_id')}` "
                 f"type=`{event.get('event_type')}` label=`{event.get('label')}` confidence=`{event.get('confidence')}` model_id=`{event.get('model_id')}`"
             )
+        lines.extend(["", "## Assistant summaries"])
+        if summaries:
+            for summary in summaries:
+                lines.append(f"- summary_id=`{summary.get('summary_id')}` event_id=`{summary.get('event_id')}` status=`{summary.get('status')}`: {summary.get('summary_text')}")
+        else:
+            lines.append("- No assistant summary was recorded before this report was generated.")
         lines.extend([
             "",
             "## Operator notes",

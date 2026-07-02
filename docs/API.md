@@ -94,3 +94,52 @@ Body:
 ```json
 {"label":"false_positive","reason":"operator review","operator":"operator"}
 ```
+
+## Node1 AI Camera Assistant v0.1 routes
+
+The v0.1 assistant milestone adds DB-backed summary and event-contract endpoints. These routes operate only on local MonitorMe SQLite evidence.
+
+```text
+POST /assistant/events/{event_id}/summary
+GET  /assistant/summaries
+GET  /assistant/event-contracts
+POST /assistant/ask
+POST /assistant/reports/incident
+```
+
+Create or refresh a deterministic summary for one event:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8088/assistant/events/<event_id>/summary \
+  | python3 -m json.tool
+```
+
+List summaries:
+
+```bash
+curl -sS 'http://127.0.0.1:8088/assistant/summaries?limit=20' \
+  | python3 -m json.tool
+```
+
+List event contracts:
+
+```bash
+curl -sS 'http://127.0.0.1:8088/assistant/event-contracts?limit=20' \
+  | python3 -m json.tool
+```
+
+Ask over the local evidence DB:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8088/assistant/ask \
+  -H 'Content-Type: application/json' \
+  -d '{"question":"What person events happened today?"}' \
+  | python3 -m json.tool
+```
+
+Safety behavior:
+
+```text
+The assistant may cite event_id, session_id, frame_id, label, confidence, bbox, model_id, artifact paths, policy decision, and audit IDs.
+The assistant must not invent identity, intent, face recognition, weapon, danger, suspicious behavior, or object labels absent from the event DB.
+```
