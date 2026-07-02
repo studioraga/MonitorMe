@@ -634,6 +634,86 @@ class MonitorMeDB:
             sql += " ORDER BY created_at DESC LIMIT ?"; args.append(limit)
             return self._decode_rows(self.conn.execute(sql, args))
 
+    def create_vlm_analysis(
+        self,
+        *,
+        event_id: str,
+        camera_id: str,
+        artifact_path: str,
+        analysis: dict[str, Any],
+        source_refs: list[dict[str, Any]],
+        status: str = "completed",
+        parent_event_id: str | None = None,
+        session_id: str | None = None,
+        frame_id: int | None = None,
+        artifact_id: str | None = None,
+        model_id: str | None = None,
+        error: str | None = None,
+    ) -> str:
+        with self._lock:
+            analysis_id = new_id("vlm")
+            self.conn.execute(
+                """
+                INSERT INTO vlm_keyframe_analyses(analysis_id, event_id, parent_event_id, session_id,
+                                                  camera_id, frame_id, artifact_id, artifact_path,
+                                                  model_id, status, analysis_json, source_refs_json,
+                                                  error, created_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    analysis_id,
+                    event_id,
+                    parent_event_id,
+                    session_id,
+                    camera_id,
+                    frame_id,
+                    artifact_id,
+                    artifact_path,
+                    model_id,
+                    status,
+                    self._json(analysis),
+                    self._json(source_refs),
+                    error,
+                    now_iso(),
+                ),
+            )
+            self.conn.commit()
+            self.audit(
+                "vlm.keyframe_analysis.create",
+                outcome=status,
+                camera_id=camera_id,
+                event_id=event_id,
+                session_id=session_id,
+                details={"analysis_id": analysis_id, "model_id": model_id, "artifact_id": artifact_id, "error": error},
+            )
+            return analysis_id
+
+    def list_vlm_analyses(
+        self,
+        *,
+        event_id: str | None = None,
+        session_id: str | None = None,
+        camera_id: str | None = None,
+        artifact_id: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        with self._lock:
+            sql = "SELECT * FROM vlm_keyframe_analyses WHERE 1=1"
+            args: list[Any] = []
+            if event_id:
+                sql += " AND event_id=?"; args.append(event_id)
+            if session_id:
+                sql += " AND session_id=?"; args.append(session_id)
+            if camera_id:
+                sql += " AND camera_id=?"; args.append(camera_id)
+            if artifact_id:
+                sql += " AND artifact_id=?"; args.append(artifact_id)
+            if status:
+                sql += " AND status=?"; args.append(status)
+            sql += " ORDER BY created_at DESC LIMIT ?"; args.append(limit)
+            return self._decode_rows(self.conn.execute(sql, args))
+
     def create_feedback(self, event_id: str, *, label: str, reason: str = "", operator: str = "operator") -> str:
         with self._lock:
             event = self.get_event(event_id)

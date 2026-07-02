@@ -109,3 +109,13 @@ MonitorMe includes helper scripts for the previously validated Node1 MAX + Gemma
 ```
 
 These scripts use the external pixi MAX quickstart project, preserve `--sample-on-host`, and validate that MonitorMe can accept a strict JSON Gemma summary over local event contracts. See `docs/MAX_GEMMA_NODE1.md`.
+
+
+### Node1 AI Camera Assistant v0.3
+
+```bash
+./scripts/validate_node1_ai_camera_assistant_v03.sh
+python -m pytest -q
+```
+
+Validates optional local Qwen VLM keyframe analysis after trigger, strict JSON validation, local-only guardrails, failed-analysis storage, and disabled-by-default behavior.

@@ -9,6 +9,7 @@ from typing import Any, Iterable, Protocol
 from .assistant_summary import AssistantSummaryService
 from .db import MonitorMeDB
 from .hash_utils import sha256_file
+from .keyframe_vlm import KeyframeVLMAnalysisService
 from .model_registry import register_default_models
 from .overlays import OverlayBox, render_evidence_overlay
 from .policy import allow_node1_local_camera
@@ -67,6 +68,11 @@ class LocalCaptureConfig:
     detector_max_detections: int = 20
     detector_input_size: int = 640
 
+    # Node1 Assistant v0.3 Qwen VLM settings. Disabled by default. When enabled,
+    # Qwen runs only after a local trigger/keyframe has already been stored.
+    vlm_enabled: bool = False
+    vlm_model_id: str = "Qwen/Qwen3-VL-2B-Instruct"
+
 
 @dataclass(frozen=True)
 class MotionResult:
@@ -94,6 +100,7 @@ class LocalCaptureResult:
     overlay_paths: list[str]
     assistant_summary_ids: list[str]
     event_contract_ids: list[str]
+    vlm_analysis_ids: list[str]
     started_at: str
     ended_at: str
     detector: dict[str, Any]
@@ -219,11 +226,13 @@ class LocalCameraCaptureRunner:
         *,
         frame_source: FrameSource | None = None,
         object_detector: ObjectDetector | None = None,
+        keyframe_vlm_client: Any | None = None,
     ):
         self.db = db
         self.config = config
         self.frame_source = frame_source or OpenCVFrameSource(config)
         self.object_detector = object_detector
+        self.keyframe_vlm_client = keyframe_vlm_client
 
     def run(self) -> LocalCaptureResult:
         cfg = self.config
@@ -250,6 +259,17 @@ class LocalCameraCaptureRunner:
                 "enabled_for_capture": cfg.detector_enabled,
             },
             enabled=cfg.detector_enabled,
+        )
+        self.db.upsert_model(
+            cfg.vlm_model_id,
+            role="vlm_keyframe_analyzer",
+            provider="qwen-openai-compatible",
+            metadata={
+                "stage": "node1-assistant-v0.3",
+                "privacy": "Disabled by default; analyzes stored trigger keyframes only through a local OpenAI-compatible VLM endpoint.",
+                "enabled_for_capture": cfg.vlm_enabled,
+            },
+            enabled=cfg.vlm_enabled,
         )
         session_id = self.db.create_session(
             camera_id=cfg.camera_id,
@@ -294,7 +314,9 @@ class LocalCameraCaptureRunner:
         overlay_paths: list[str] = []
         assistant_summary_ids: list[str] = []
         event_contract_ids: list[str] = []
+        vlm_analysis_ids: list[str] = []
         summary_service = AssistantSummaryService(self.db)
+        vlm_service = KeyframeVLMAnalysisService(self.db, vlm=self.keyframe_vlm_client) if cfg.vlm_enabled else None
         manifest_frames: list[dict[str, Any]] = []
         last_event_time = 0.0
         error: str | None = None
@@ -438,6 +460,12 @@ class LocalCameraCaptureRunner:
                             details={"error": str(exc), "object_event_ids": child_ids},
                         )
 
+                    vlm_result: dict[str, Any] | None = None
+                    if vlm_service is not None:
+                        vlm_result = vlm_service.analyze_event(motion_id)
+                        if vlm_result.get("analysis_id"):
+                            vlm_analysis_ids.append(str(vlm_result["analysis_id"]))
+
                     manifest_frames.append(
                         {
                             "frame_id": frame_id,
@@ -454,6 +482,9 @@ class LocalCameraCaptureRunner:
                             "overlay_artifact_id": overlay_artifact_id,
                             "overlay_path": (overlay_result or {}).get("overlay_path"),
                             "overlay_boxes": (overlay_result or {}).get("overlay_boxes", []),
+                            "vlm_enabled": bool(cfg.vlm_enabled),
+                            "vlm_analysis_id": (vlm_result or {}).get("analysis_id") if 'vlm_result' in locals() else None,
+                            "vlm_status": (vlm_result or {}).get("status") if 'vlm_result' in locals() else None,
                         }
                     )
             ok = True
@@ -483,6 +514,14 @@ class LocalCameraCaptureRunner:
             "overlay_paths": overlay_paths,
             "assistant_summary_ids": assistant_summary_ids,
             "event_contract_ids": event_contract_ids,
+            "vlm_analysis_ids": vlm_analysis_ids,
+            "vlm": {
+                "enabled": bool(cfg.vlm_enabled),
+                "model_id": cfg.vlm_model_id,
+                "analysis_count": len(vlm_analysis_ids),
+                "runs_after_trigger_only": True,
+                "raw_frame_upload": False,
+            },
             "detector": detector_status,
             "policy_decision": policy,
             "privacy": {"external_upload": False, "face_recognition": False, "raw_frame_upload": False},
@@ -521,7 +560,7 @@ class LocalCameraCaptureRunner:
                 "camera.capture.completed",
                 camera_id=cfg.camera_id,
                 session_id=session_id,
-                details={"frames_seen": frames_seen, "motion_events": len(motion_event_ids), "object_events": len(object_event_ids), "assistant_summaries": len(assistant_summary_ids)},
+                details={"frames_seen": frames_seen, "motion_events": len(motion_event_ids), "object_events": len(object_event_ids), "assistant_summaries": len(assistant_summary_ids), "vlm_analyses": len(vlm_analysis_ids)},
             )
         return LocalCaptureResult(
             ok=ok,
@@ -540,6 +579,7 @@ class LocalCameraCaptureRunner:
             overlay_paths=overlay_paths,
             assistant_summary_ids=assistant_summary_ids,
             event_contract_ids=event_contract_ids,
+            vlm_analysis_ids=vlm_analysis_ids,
             started_at=started_at,
             ended_at=ended_at,
             detector=detector_status,

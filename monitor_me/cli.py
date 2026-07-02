@@ -11,6 +11,8 @@ from .detector_health import check_detector_health
 from .evidence_pack import EvidencePackBuilder
 from .local_capture import LocalCameraCaptureRunner, LocalCaptureConfig
 from .llm_client import GemmaMaxConfig, gemma_max_health
+from .keyframe_vlm import KeyframeVLMAnalysisService
+from .vlm_client import QwenVLMConfig, qwen_vlm_health
 from .model_registry import register_default_models
 from .report_tools import IncidentReportBuilder
 from .tracker_tools import TrackerTools
@@ -41,6 +43,13 @@ def cmd_detector_health(args: argparse.Namespace) -> int:
 def cmd_llm_health(args: argparse.Namespace) -> int:
     config = GemmaMaxConfig.from_env()
     result = gemma_max_health(config, probe=args.probe)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0 if result.get("ok") else (0 if args.allow_unconfigured else 3)
+
+
+def cmd_vlm_health(args: argparse.Namespace) -> int:
+    config = QwenVLMConfig.from_env()
+    result = qwen_vlm_health(config, probe=args.probe)
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0 if result.get("ok") else (0 if args.allow_unconfigured else 3)
 
@@ -77,6 +86,8 @@ def cmd_capture_run(args: argparse.Namespace) -> int:
         detector_input_size=args.detector_input_size,
         overlay_enabled=not args.no_overlays,
         overlay_dir_name=args.overlay_dir_name,
+        vlm_enabled=args.vlm_enabled,
+        vlm_model_id=args.vlm_model_id,
     )
     result = LocalCameraCaptureRunner(db, config).run().as_dict()
     print(json.dumps(result, indent=2, sort_keys=True))
@@ -138,6 +149,29 @@ def cmd_event_contracts(args: argparse.Namespace) -> int:
     db.close()
     return 0
 
+
+def cmd_vlm_analyze_event(args: argparse.Namespace) -> int:
+    db = _db(args)
+    result = KeyframeVLMAnalysisService(db).analyze_event(args.event_id)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    db.close()
+    return 0 if result.get("status") in {"completed", "skipped"} else 3
+
+
+def cmd_vlm_analyses(args: argparse.Namespace) -> int:
+    db = _db(args)
+    items = db.list_vlm_analyses(
+        event_id=args.event_id,
+        session_id=args.session_id,
+        camera_id=args.camera_id,
+        artifact_id=args.artifact_id,
+        status=args.status,
+        limit=args.limit,
+    )
+    print(json.dumps({"vlm_analyses": items, "count": len(items)}, indent=2, sort_keys=True))
+    db.close()
+    return 0
+
 def cmd_evidence_pack(args: argparse.Namespace) -> int:
     db = _db(args)
     result = EvidencePackBuilder(db, root=args.output_root).build_for_event(args.event_id)
@@ -167,7 +201,7 @@ def cmd_feedback(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="monitorme", description="MonitorMe Node1 AI Camera Assistant v0.2")
+    parser = argparse.ArgumentParser(prog="monitorme", description="MonitorMe Node1 AI Camera Assistant v0.3")
     parser.add_argument("--db", default="data/events/monitorme.db", help="SQLite DB path")
     sub = parser.add_subparsers(required=True)
 
@@ -182,6 +216,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--allow-unconfigured", action="store_true", help="Return exit 0 when Gemma/MAX is not configured")
     p.add_argument("--probe", action="store_true", help="Probe the configured MAX /v1/models endpoint")
     p.set_defaults(func=cmd_llm_health)
+
+    p = sub.add_parser("vlm-health", help="Show local Qwen VLM OpenAI-compatible keyframe-analysis configuration")
+    p.add_argument("--allow-unconfigured", action="store_true", help="Return exit 0 when Qwen VLM is not configured")
+    p.add_argument("--probe", action="store_true", help="Probe the configured VLM /v1/models endpoint")
+    p.set_defaults(func=cmd_vlm_health)
 
     p = sub.add_parser("detector-health", help="Validate local YOLO ONNX detector model/runtime without opening camera")
     p.add_argument("--model-id", default="yolo11n-coco-onnx")
@@ -213,6 +252,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--detector-input-size", type=int, default=640)
     p.add_argument("--no-overlays", action="store_true", help="Disable Step 17E annotated keyframe overlays")
     p.add_argument("--overlay-dir-name", default="overlays", help="Session subdirectory for annotated keyframe overlays")
+    p.add_argument("--vlm-enabled", action="store_true", help="Run optional Qwen VLM analysis after trigger keyframes")
+    p.add_argument("--vlm-model-id", default="Qwen/Qwen3-VL-2B-Instruct")
     p.set_defaults(func=cmd_capture_run)
 
     p = sub.add_parser("events", help="List normalized events")
@@ -256,6 +297,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--camera-id")
     p.add_argument("--limit", type=int, default=50)
     p.set_defaults(func=cmd_event_contracts)
+
+    p = sub.add_parser("vlm-analyze-event", help="Run optional Qwen VLM analysis for a stored trigger keyframe")
+    p.add_argument("event_id")
+    p.set_defaults(func=cmd_vlm_analyze_event)
+
+    p = sub.add_parser("vlm-analyses", help="List Qwen VLM keyframe analyses")
+    p.add_argument("--event-id")
+    p.add_argument("--session-id")
+    p.add_argument("--camera-id")
+    p.add_argument("--artifact-id")
+    p.add_argument("--status", choices=["completed", "failed", "skipped"])
+    p.add_argument("--limit", type=int, default=50)
+    p.set_defaults(func=cmd_vlm_analyses)
 
     p = sub.add_parser("evidence-pack", help="Build an evidence pack for an event")
     p.add_argument("event_id")

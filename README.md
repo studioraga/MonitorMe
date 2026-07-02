@@ -696,3 +696,8 @@ Node1 logs showed that the MAX server can progress past Mojo cache prebuild, Hug
 Fixes a test-only regression in `tests/test_max_helper_health.py` where newly added
 MAX helper regression tests referenced `ROOT` without defining it. Runtime MAX/Gemma
 startup behavior is unchanged from v0.2.12.
+
+
+## Node1 AI Camera Assistant v0.3
+
+Adds optional Qwen VLM keyframe analysis after a local motion/YOLO trigger. Qwen VLM is disabled by default, must use a local OpenAI-compatible endpoint unless explicitly allowed, stores strict JSON in `vlm_keyframe_analyses`, and cannot override YOLO facts or deterministic policy. See `docs/NODE1_AI_CAMERA_ASSISTANT_V0_3.md`.

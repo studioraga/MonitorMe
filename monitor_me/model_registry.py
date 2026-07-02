@@ -41,10 +41,13 @@ DEFAULT_MODELS = [
     ),
     ModelRecord(
         model_id="Qwen/Qwen3-VL-2B-Instruct",
-        role="vlm_model_future",
-        provider="disabled",
+        role="vlm_keyframe_analyzer",
+        provider="qwen-openai-compatible",
         enabled=False,
-        metadata={"stage": "future-step-18", "privacy": "Only keyframes/evidence crops after explicit enablement."},
+        metadata={
+            "stage": "node1-assistant-v0.3",
+            "privacy": "Disabled by default; analyzes stored trigger keyframes only through a local OpenAI-compatible VLM endpoint.",
+        },
     ),
     ModelRecord(
         model_id="sam2-small",
