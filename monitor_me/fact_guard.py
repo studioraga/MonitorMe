@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any
 
 
@@ -41,7 +42,9 @@ class FactGuard:
             violations.append("answer has no evidence but does not clearly state the evidence limit")
 
         for term, rule in self.SENSITIVE_OR_UNSUPPORTED_TERMS.items():
-            if term in answer_l:
+            # Use token-aware matching so random evidence IDs such as
+            # "evt_face..." do not trigger a face-recognition violation.
+            if re.search(r"(?<![A-Za-z0-9_])" + re.escape(term) + r"(?![A-Za-z0-9_])", answer_l):
                 required = rule["requires_label"]
                 if required not in labels:
                     violations.append(f"unsupported claim term '{term}' requires normalized label '{required}'")

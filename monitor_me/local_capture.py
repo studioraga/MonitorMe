@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections import deque
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable, Protocol
@@ -10,6 +11,7 @@ from .assistant_summary import AssistantSummaryService
 from .db import MonitorMeDB
 from .hash_utils import sha256_file
 from .keyframe_vlm import KeyframeVLMAnalysisService
+from .short_clip_vlm import ShortClipVLMExperimentService
 from .model_registry import register_default_models
 from .overlays import OverlayBox, render_evidence_overlay
 from .policy import allow_node1_local_camera
@@ -73,6 +75,14 @@ class LocalCaptureConfig:
     vlm_enabled: bool = False
     vlm_model_id: str = "Qwen/Qwen3-VL-2B-Instruct"
 
+    # Node1 Assistant v0.4 SmolVLM2 short clip experiment settings. Disabled by
+    # default. When enabled, MonitorMe writes a small local sampled clip bundle
+    # after a trigger and runs SmolVLM2 only on that stored local evidence.
+    smolvlm2_enabled: bool = False
+    smolvlm2_model_id: str = "HuggingFaceTB/SmolVLM2-500M-Video-Instruct"
+    smolvlm2_clip_frame_count: int = 8
+    smolvlm2_clip_dir_name: str = "short_clips"
+
 
 @dataclass(frozen=True)
 class MotionResult:
@@ -101,6 +111,7 @@ class LocalCaptureResult:
     assistant_summary_ids: list[str]
     event_contract_ids: list[str]
     vlm_analysis_ids: list[str]
+    smolvlm2_experiment_ids: list[str]
     started_at: str
     ended_at: str
     detector: dict[str, Any]
@@ -227,12 +238,14 @@ class LocalCameraCaptureRunner:
         frame_source: FrameSource | None = None,
         object_detector: ObjectDetector | None = None,
         keyframe_vlm_client: Any | None = None,
+        short_clip_vlm_client: Any | None = None,
     ):
         self.db = db
         self.config = config
         self.frame_source = frame_source or OpenCVFrameSource(config)
         self.object_detector = object_detector
         self.keyframe_vlm_client = keyframe_vlm_client
+        self.short_clip_vlm_client = short_clip_vlm_client
 
     def run(self) -> LocalCaptureResult:
         cfg = self.config
@@ -271,6 +284,18 @@ class LocalCameraCaptureRunner:
             },
             enabled=cfg.vlm_enabled,
         )
+        self.db.upsert_model(
+            cfg.smolvlm2_model_id,
+            role="vlm_short_clip_experiment",
+            provider="smolvlm2-openai-compatible",
+            metadata={
+                "stage": "node1-assistant-v0.4",
+                "privacy": "Disabled by default; analyzes stored local short clip frame bundles only after trigger.",
+                "enabled_for_capture": cfg.smolvlm2_enabled,
+                "experimental": True,
+            },
+            enabled=cfg.smolvlm2_enabled,
+        )
         session_id = self.db.create_session(
             camera_id=cfg.camera_id,
             source_node="node1",
@@ -284,9 +309,12 @@ class LocalCameraCaptureRunner:
         dataset_dir = Path(cfg.data_root) / "captures" / session_id
         frames_dir = dataset_dir / "keyframes"
         overlays_dir = dataset_dir / cfg.overlay_dir_name
+        short_clips_dir = dataset_dir / cfg.smolvlm2_clip_dir_name
         frames_dir.mkdir(parents=True, exist_ok=True)
         if cfg.overlay_enabled:
             overlays_dir.mkdir(parents=True, exist_ok=True)
+        if cfg.smolvlm2_enabled:
+            short_clips_dir.mkdir(parents=True, exist_ok=True)
         manifest_path = dataset_dir / "manifest.json"
 
         gate = MotionGate(motion_threshold=cfg.motion_threshold, pixel_threshold=cfg.motion_pixel_threshold)
@@ -315,8 +343,11 @@ class LocalCameraCaptureRunner:
         assistant_summary_ids: list[str] = []
         event_contract_ids: list[str] = []
         vlm_analysis_ids: list[str] = []
+        smolvlm2_experiment_ids: list[str] = []
         summary_service = AssistantSummaryService(self.db)
         vlm_service = KeyframeVLMAnalysisService(self.db, vlm=self.keyframe_vlm_client) if cfg.vlm_enabled else None
+        smolvlm2_service = ShortClipVLMExperimentService(self.db, vlm=self.short_clip_vlm_client) if cfg.smolvlm2_enabled else None
+        recent_frames: deque[tuple[int, Any]] = deque(maxlen=max(1, int(cfg.smolvlm2_clip_frame_count)))
         manifest_frames: list[dict[str, Any]] = []
         last_event_time = 0.0
         error: str | None = None
@@ -333,6 +364,8 @@ class LocalCameraCaptureRunner:
                     break
                 frame_id += 1
                 frames_seen += 1
+                if cfg.smolvlm2_enabled:
+                    recent_frames.append((frame_id, frame.copy() if hasattr(frame, "copy") else frame))
                 motion = gate.evaluate(frame)
                 now_mono = time.monotonic()
                 should_emit = motion.motion and (now_mono - last_event_time >= cfg.min_event_gap_sec)
@@ -466,6 +499,28 @@ class LocalCameraCaptureRunner:
                         if vlm_result.get("analysis_id"):
                             vlm_analysis_ids.append(str(vlm_result["analysis_id"]))
 
+                    smolvlm2_result: dict[str, Any] | None = None
+                    short_clip_artifact_id: str | None = None
+                    short_clip_path: str | None = None
+                    if smolvlm2_service is not None:
+                        clip = self._write_short_clip_bundle(
+                            output_root=short_clips_dir,
+                            session_id=session_id,
+                            camera_id=cfg.camera_id,
+                            trigger_event_id=motion_id,
+                            trigger_frame_id=frame_id,
+                            event_ts=event_ts,
+                            frames=list(recent_frames),
+                        )
+                        short_clip_artifact_id = clip["clip_artifact_id"]
+                        short_clip_path = clip["manifest_path"]
+                        artifact_ids.extend(clip["artifact_ids"])
+                        artifact_paths.extend(clip["artifact_paths"])
+                        bytes_written += int(clip["bytes_written"])
+                        smolvlm2_result = smolvlm2_service.analyze_event(motion_id)
+                        if smolvlm2_result.get("experiment_id"):
+                            smolvlm2_experiment_ids.append(str(smolvlm2_result["experiment_id"]))
+
                     manifest_frames.append(
                         {
                             "frame_id": frame_id,
@@ -485,6 +540,11 @@ class LocalCameraCaptureRunner:
                             "vlm_enabled": bool(cfg.vlm_enabled),
                             "vlm_analysis_id": (vlm_result or {}).get("analysis_id") if 'vlm_result' in locals() else None,
                             "vlm_status": (vlm_result or {}).get("status") if 'vlm_result' in locals() else None,
+                            "smolvlm2_enabled": bool(cfg.smolvlm2_enabled),
+                            "smolvlm2_experiment_id": (smolvlm2_result or {}).get("experiment_id") if 'smolvlm2_result' in locals() else None,
+                            "smolvlm2_status": (smolvlm2_result or {}).get("status") if 'smolvlm2_result' in locals() else None,
+                            "short_clip_artifact_id": short_clip_artifact_id,
+                            "short_clip_path": short_clip_path,
                         }
                     )
             ok = True
@@ -515,6 +575,16 @@ class LocalCameraCaptureRunner:
             "assistant_summary_ids": assistant_summary_ids,
             "event_contract_ids": event_contract_ids,
             "vlm_analysis_ids": vlm_analysis_ids,
+            "smolvlm2_experiment_ids": smolvlm2_experiment_ids,
+            "smolvlm2": {
+                "enabled": bool(cfg.smolvlm2_enabled),
+                "model_id": cfg.smolvlm2_model_id,
+                "experiment_count": len(smolvlm2_experiment_ids),
+                "clip_frame_count": int(cfg.smolvlm2_clip_frame_count),
+                "runs_after_trigger_only": True,
+                "raw_frame_upload": False,
+                "experimental": True,
+            },
             "vlm": {
                 "enabled": bool(cfg.vlm_enabled),
                 "model_id": cfg.vlm_model_id,
@@ -560,7 +630,7 @@ class LocalCameraCaptureRunner:
                 "camera.capture.completed",
                 camera_id=cfg.camera_id,
                 session_id=session_id,
-                details={"frames_seen": frames_seen, "motion_events": len(motion_event_ids), "object_events": len(object_event_ids), "assistant_summaries": len(assistant_summary_ids), "vlm_analyses": len(vlm_analysis_ids)},
+                details={"frames_seen": frames_seen, "motion_events": len(motion_event_ids), "object_events": len(object_event_ids), "assistant_summaries": len(assistant_summary_ids), "vlm_analyses": len(vlm_analysis_ids), "smolvlm2_experiments": len(smolvlm2_experiment_ids)},
             )
         return LocalCaptureResult(
             ok=ok,
@@ -580,6 +650,7 @@ class LocalCameraCaptureRunner:
             assistant_summary_ids=assistant_summary_ids,
             event_contract_ids=event_contract_ids,
             vlm_analysis_ids=vlm_analysis_ids,
+            smolvlm2_experiment_ids=smolvlm2_experiment_ids,
             started_at=started_at,
             ended_at=ended_at,
             detector=detector_status,
@@ -691,6 +762,92 @@ class LocalCameraCaptureRunner:
             )
             object_event_ids.append(object_id)
         return object_event_ids
+
+    def _write_short_clip_bundle(
+        self,
+        *,
+        output_root: Path,
+        session_id: str,
+        camera_id: str,
+        trigger_event_id: str,
+        trigger_frame_id: int,
+        event_ts: str,
+        frames: list[tuple[int, Any]],
+    ) -> dict[str, Any]:
+        clip_dir = output_root / f"clip_{trigger_frame_id:06d}"
+        clip_dir.mkdir(parents=True, exist_ok=True)
+        frame_items: list[dict[str, Any]] = []
+        artifact_ids: list[str] = []
+        artifact_paths: list[str] = []
+        bytes_written = 0
+        for fid, frame in frames[-max(1, int(self.config.smolvlm2_clip_frame_count)):]:
+            frame_path = clip_dir / f"frame_{fid:06d}.jpg"
+            self._write_frame(frame_path, frame)
+            size = frame_path.stat().st_size
+            digest = sha256_file(frame_path)
+            frame_artifact_id = self.db.add_artifact(
+                session_id=session_id,
+                camera_id=camera_id,
+                artifact_type="short_clip_frame",
+                path=str(frame_path),
+                media_type="image/jpeg",
+                size_bytes=size,
+                sha256=digest,
+            )
+            bytes_written += size
+            artifact_ids.append(frame_artifact_id)
+            artifact_paths.append(str(frame_path))
+            frame_items.append(
+                {
+                    "frame_id": fid,
+                    "path": str(frame_path),
+                    "artifact_id": frame_artifact_id,
+                    "sha256": digest,
+                    "role": "trigger" if fid == trigger_frame_id else "context",
+                }
+            )
+        manifest = {
+            "schema": "monitorme.short_clip_manifest.v0.4",
+            "session_id": session_id,
+            "camera_id": camera_id,
+            "trigger_event_id": trigger_event_id,
+            "trigger_frame_id": trigger_frame_id,
+            "created_at": now_iso(),
+            "event_ts": event_ts,
+            "frame_count": len(frame_items),
+            "frames": frame_items,
+            "privacy": {"external_upload": False, "raw_frame_upload": False, "local_experiment_only": True},
+        }
+        manifest_path = clip_dir / "clip_manifest.json"
+        manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
+        manifest_size = manifest_path.stat().st_size
+        manifest_digest = sha256_file(manifest_path)
+        clip_artifact_id = self.db.add_artifact(
+            session_id=session_id,
+            camera_id=camera_id,
+            artifact_type="short_clip_manifest",
+            path=str(manifest_path),
+            media_type="application/json",
+            size_bytes=manifest_size,
+            sha256=manifest_digest,
+        )
+        bytes_written += manifest_size
+        artifact_ids.append(clip_artifact_id)
+        artifact_paths.append(str(manifest_path))
+        self.db.audit(
+            "smolvlm2.short_clip_bundle.create",
+            camera_id=camera_id,
+            event_id=trigger_event_id,
+            session_id=session_id,
+            details={"clip_artifact_id": clip_artifact_id, "manifest_path": str(manifest_path), "frame_count": len(frame_items)},
+        )
+        return {
+            "clip_artifact_id": clip_artifact_id,
+            "manifest_path": str(manifest_path),
+            "artifact_ids": artifact_ids,
+            "artifact_paths": artifact_paths,
+            "bytes_written": bytes_written,
+        }
 
     def _write_overlay(
         self,

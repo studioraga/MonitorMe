@@ -322,3 +322,15 @@ python -m pytest -q
 ```
 
 Validates optional local Qwen VLM keyframe analysis after trigger, strict JSON validation, local-only guardrails, failed-analysis storage, and disabled-by-default behavior.
+
+
+## Node1 AI Camera Assistant v0.4 — SmolVLM2 short clip experiments
+
+Adds optional local-only SmolVLM2 experiments over stored short clip bundles after a trigger. Disabled by default. v0.4.1 constrains SmolVLM2 with vLLM `structured_outputs` JSON schema, stores bounded visual-state fields in `smolvlm2_clip_experiments`, and rejects identity, person-profile, intent, threat, weapon, and unsupported evidence-ID claims.
+
+Validation command:
+
+```bash
+./scripts/validate_node1_ai_camera_assistant_v04.sh
+./scripts/validate_node1_ai_camera_assistant_v041.sh
+```

@@ -714,6 +714,87 @@ class MonitorMeDB:
             sql += " ORDER BY created_at DESC LIMIT ?"; args.append(limit)
             return self._decode_rows(self.conn.execute(sql, args))
 
+
+    def create_smolvlm2_clip_experiment(
+        self,
+        *,
+        event_id: str,
+        parent_event_id: str | None,
+        session_id: str | None,
+        camera_id: str,
+        trigger_frame_id: int | None,
+        clip_artifact_id: str | None,
+        clip_path: str,
+        model_id: str | None,
+        status: str,
+        experiment: dict[str, Any],
+        source_refs: list[dict[str, Any]],
+        error: str | None,
+    ) -> str:
+        with self._lock:
+            experiment_id = new_id("svlm")
+            self.conn.execute(
+                """
+                INSERT INTO smolvlm2_clip_experiments(experiment_id, event_id, parent_event_id, session_id,
+                                                       camera_id, trigger_frame_id, clip_artifact_id, clip_path,
+                                                       model_id, status, experiment_json, source_refs_json,
+                                                       error, created_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    experiment_id,
+                    event_id,
+                    parent_event_id,
+                    session_id,
+                    camera_id,
+                    trigger_frame_id,
+                    clip_artifact_id,
+                    clip_path,
+                    model_id,
+                    status,
+                    self._json(experiment),
+                    self._json(source_refs),
+                    error,
+                    now_iso(),
+                ),
+            )
+            self.conn.commit()
+            self.audit(
+                "smolvlm2.short_clip_experiment.create",
+                outcome=status,
+                camera_id=camera_id,
+                event_id=event_id,
+                session_id=session_id,
+                details={"experiment_id": experiment_id, "model_id": model_id, "clip_artifact_id": clip_artifact_id, "error": error},
+            )
+            return experiment_id
+
+    def list_smolvlm2_clip_experiments(
+        self,
+        *,
+        event_id: str | None = None,
+        session_id: str | None = None,
+        camera_id: str | None = None,
+        clip_artifact_id: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        with self._lock:
+            sql = "SELECT * FROM smolvlm2_clip_experiments WHERE 1=1"
+            args: list[Any] = []
+            if event_id:
+                sql += " AND event_id=?"; args.append(event_id)
+            if session_id:
+                sql += " AND session_id=?"; args.append(session_id)
+            if camera_id:
+                sql += " AND camera_id=?"; args.append(camera_id)
+            if clip_artifact_id:
+                sql += " AND clip_artifact_id=?"; args.append(clip_artifact_id)
+            if status:
+                sql += " AND status=?"; args.append(status)
+            sql += " ORDER BY created_at DESC LIMIT ?"; args.append(limit)
+            return self._decode_rows(self.conn.execute(sql, args))
+
     def create_feedback(self, event_id: str, *, label: str, reason: str = "", operator: str = "operator") -> str:
         with self._lock:
             event = self.get_event(event_id)

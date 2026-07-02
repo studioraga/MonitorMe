@@ -701,3 +701,47 @@ startup behavior is unchanged from v0.2.12.
 ## Node1 AI Camera Assistant v0.3
 
 Adds optional Qwen VLM keyframe analysis after a local motion/YOLO trigger. Qwen VLM is disabled by default, must use a local OpenAI-compatible endpoint unless explicitly allowed, stores strict JSON in `vlm_keyframe_analyses`, and cannot override YOLO facts or deterministic policy. See `docs/NODE1_AI_CAMERA_ASSISTANT_V0_3.md`.
+
+
+## Node1 AI Camera Assistant v0.4 — SmolVLM2 short clip experiments
+
+v0.4 adds optional local-only SmolVLM2 short clip experiments after a motion/YOLO trigger. MonitorMe writes a short local clip bundle from sampled trigger-context frames, stores it as evidence, and asks SmolVLM2 for strictly validated companion temporal observations. It is disabled by default and cannot create detections, override policy, or make identity/intent/threat claims.
+
+Validation:
+
+```bash
+./scripts/validate_node1_ai_camera_assistant_v01.sh
+./scripts/validate_node1_ai_camera_assistant_v02.sh
+./scripts/validate_node1_ai_camera_assistant_v03.sh
+./scripts/validate_node1_ai_camera_assistant_v04.sh
+python -m pytest -q
+```
+
+## Node1 AI Camera Assistant v0.4.1 — constrained SmolVLM2 short clip experiments
+
+SmolVLM2 short clip experiments are optional and disabled by default. v0.4.1
+switches the SmolVLM2 path from freeform captions to vLLM `structured_outputs`
+with a constrained JSON schema. The model stores only bounded visual-state fields:
+`visible_scene`, `person_like_presence`, `vehicle_like_presence`, `motion_claim`,
+`safe_observation`, and `unsupported_claims`.
+
+For Node1 RTX 5060 Ti smoke testing with the 4096-token SmolVLM2 server context:
+
+```bash
+export MONITORME_SMOLVLM2_PROVIDER=smolvlm2-openai
+export MONITORME_ASSISTANT_USE_SMOLVLM2=1
+export MONITORME_SMOLVLM2_BASE_URL=http://127.0.0.1:8003/v1
+export MONITORME_SMOLVLM2_MODEL_ID=HuggingFaceTB/SmolVLM2-500M-Video-Instruct
+export MONITORME_SMOLVLM2_API_KEY=EMPTY
+export MONITORME_SMOLVLM2_MAX_FRAMES=1
+export MONITORME_SMOLVLM2_MAX_TOKENS=300
+export MONITORME_SMOLVLM2_TEMPERATURE=0.0
+```
+
+Run validation:
+
+```bash
+./scripts/validate_node1_ai_camera_assistant_v04.sh
+./scripts/validate_node1_ai_camera_assistant_v041.sh
+python -m pytest -q
+```

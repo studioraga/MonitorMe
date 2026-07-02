@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "monitorme"
-version = "0.3.0"
-description = "MonitorMe Node1 AI Camera Assistant v0.2 with Gemma/MAX strict JSON summaries and deterministic fallback"
+version = "0.4.1"
+description = "MonitorMe Node1 AI Camera Assistant v0.4 with Qwen keyframes and SmolVLM2 short clip experiments"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}

@@ -12,6 +12,8 @@ from .local_capture import LocalCameraCaptureRunner, LocalCaptureConfig
 from .llm_client import gemma_max_health
 from .keyframe_vlm import KeyframeVLMAnalysisService
 from .vlm_client import qwen_vlm_health
+from .short_clip_vlm import ShortClipVLMExperimentService
+from .smolvlm2_client import smolvlm2_health
 from .model_registry import register_default_models
 from .report_tools import IncidentReportBuilder
 from .tracker_tools import TrackerTools
@@ -36,6 +38,7 @@ def create_app(db_path: str | None = None):
     trackers = TrackerTools(db)
     summary_service = AssistantSummaryService(db)
     vlm_service = KeyframeVLMAnalysisService(db)
+    smolvlm2_service = ShortClipVLMExperimentService(db)
 
     class AskRequest(BaseModel):
         question: str
@@ -77,6 +80,9 @@ def create_app(db_path: str | None = None):
         overlay_dir_name: str = "overlays"
         vlm_enabled: bool = False
         vlm_model_id: str = "Qwen/Qwen3-VL-2B-Instruct"
+        smolvlm2_enabled: bool = False
+        smolvlm2_model_id: str = "HuggingFaceTB/SmolVLM2-500M-Video-Instruct"
+        smolvlm2_clip_frame_count: int = Field(default=8, ge=1, le=64)
 
     app = FastAPI(title="MonitorMe Node1 Local Evidence Assistant", version=__version__)
 
@@ -106,6 +112,9 @@ def create_app(db_path: str | None = None):
                 "vlm_health": "GET /assistant/vlm/health",
                 "vlm_analysis": "POST /assistant/events/{event_id}/vlm-analysis",
                 "vlm_analyses": "GET /assistant/vlm-analyses",
+                "smolvlm2_health": "GET /assistant/smolvlm2/health",
+                "smolvlm2_experiment": "POST /assistant/events/{event_id}/smolvlm2-experiment",
+                "smolvlm2_experiments": "GET /assistant/smolvlm2-experiments",
                 "evidence_pack": "POST /assistant/events/{event_id}/evidence-pack",
                 "incident_report": "POST /assistant/reports/incident",
                 "feedback": "POST /events/{event_id}/feedback",
@@ -120,9 +129,13 @@ def create_app(db_path: str | None = None):
                 "node1_ai_camera_assistant_v0_1": True,
                 "node1_ai_camera_assistant_v0_2": True,
                 "node1_ai_camera_assistant_v0_3": True,
+                "node1_ai_camera_assistant_v0_4": True,
                 "gemma_max_raw_frame_upload": False,
                 "qwen_vlm_after_trigger_only": True,
                 "qwen_vlm_enabled_by_default": False,
+                "smolvlm2_after_trigger_only": True,
+                "smolvlm2_enabled_by_default": False,
+                "smolvlm2_short_clip_experimental": True,
             },
         }
 
@@ -202,6 +215,10 @@ def create_app(db_path: str | None = None):
     def assistant_vlm_health(probe: bool = False) -> dict[str, Any]:
         return qwen_vlm_health(probe=probe)
 
+    @app.get("/assistant/smolvlm2/health")
+    def assistant_smolvlm2_health(probe: bool = False) -> dict[str, Any]:
+        return smolvlm2_health(probe=probe)
+
     @app.post("/assistant/ask")
     def ask(req: AskRequest = Body(...)) -> dict[str, Any]:
         answer = assistant.ask(req.question, camera_id=req.camera_id, limit=req.limit, use_llm=req.use_llm)
@@ -237,6 +254,20 @@ def create_app(db_path: str | None = None):
     def assistant_vlm_analyses(event_id: str | None = None, session_id: str | None = None, camera_id: str | None = None, artifact_id: str | None = None, status: str | None = None, limit: int = 100) -> dict[str, Any]:
         items = db.list_vlm_analyses(event_id=event_id, session_id=session_id, camera_id=camera_id, artifact_id=artifact_id, status=status, limit=limit)
         return {"vlm_analyses": items, "count": len(items)}
+
+    @app.post("/assistant/events/{event_id}/smolvlm2-experiment")
+    def assistant_event_smolvlm2_experiment(event_id: str) -> dict[str, Any]:
+        try:
+            return smolvlm2_service.analyze_event(event_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/assistant/smolvlm2-experiments")
+    def assistant_smolvlm2_experiments(event_id: str | None = None, session_id: str | None = None, camera_id: str | None = None, clip_artifact_id: str | None = None, status: str | None = None, limit: int = 100) -> dict[str, Any]:
+        items = db.list_smolvlm2_clip_experiments(event_id=event_id, session_id=session_id, camera_id=camera_id, clip_artifact_id=clip_artifact_id, status=status, limit=limit)
+        return {"smolvlm2_clip_experiments": items, "count": len(items)}
 
     @app.post("/events/{event_id}/feedback")
     def feedback(event_id: str, req: FeedbackRequest = Body(...)) -> dict[str, Any]:

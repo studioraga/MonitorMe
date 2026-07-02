@@ -50,6 +50,17 @@ DEFAULT_MODELS = [
         },
     ),
     ModelRecord(
+        model_id="HuggingFaceTB/SmolVLM2-500M-Video-Instruct",
+        role="vlm_short_clip_experiment",
+        provider="smolvlm2-openai-compatible",
+        enabled=False,
+        metadata={
+            "stage": "node1-assistant-v0.4",
+            "privacy": "Disabled by default; analyzes local short clip frame bundles after trigger only.",
+            "experimental": True,
+        },
+    ),
+    ModelRecord(
         model_id="sam2-small",
         role="segmentation_model_future",
         provider="disabled",
