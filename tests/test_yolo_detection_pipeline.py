@@ -85,7 +85,7 @@ def test_yolo_child_object_rows_are_normalized_after_parent_motion_event(tmp_pat
         assert row["attrs"]["detector"] == "yolo_onnx"
         assert row["attrs"]["keyframe_artifact_id"] == parent["artifact_id"]
 
-    audits = db.recent_audit(session_id=result.session_id, limit=20)
+    audits = db.recent_audit(session_id=result.session_id, limit=80)
     actions = {row["action"] for row in audits}
     assert "detector.loaded" in actions
     assert "detector.run" in actions

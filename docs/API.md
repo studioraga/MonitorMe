@@ -143,3 +143,38 @@ Safety behavior:
 The assistant may cite event_id, session_id, frame_id, label, confidence, bbox, model_id, artifact paths, policy decision, and audit IDs.
 The assistant must not invent identity, intent, face recognition, weapon, danger, suspicious behavior, or object labels absent from the event DB.
 ```
+
+---
+
+## Node1 AI Camera Assistant v0.2 — Gemma/MAX strict JSON summaries
+
+v0.2 adds an optional local Gemma 3 1B explanation layer served by MAX through an OpenAI-compatible endpoint.
+
+```text
+YOLO = fast visual facts
+Node1 policy = deterministic decisions/actions
+Gemma/MAX = explanation/Q&A over structured event facts only
+```
+
+Validation command:
+
+```bash
+./scripts/validate_node1_ai_camera_assistant_v02.sh
+```
+
+Gemma/MAX is disabled by default. If it is unavailable or returns invalid/unsupported JSON, MonitorMe stores the deterministic summary from v0.1 and records the fallback reason in summary facts and audit logs.
+
+See `docs/NODE1_AI_CAMERA_ASSISTANT_V0_2.md` for the full prompt/output contract and Node1 setup.
+
+
+## Node1 MAX/Gemma live validation helpers
+
+MonitorMe includes helper scripts for the previously validated Node1 MAX + Gemma 3 1B path:
+
+```bash
+./scripts/max/term1_start_max_gemma3_1b.sh
+./scripts/max/term2_validate_max_gemma3_1b.sh
+./scripts/max/term2_validate_monitorme_gemma_v02_live.sh
+```
+
+These scripts use the external pixi MAX quickstart project, preserve `--sample-on-host`, and validate that MonitorMe can accept a strict JSON Gemma summary over local event contracts. See `docs/MAX_GEMMA_NODE1.md`.

@@ -91,3 +91,16 @@ def test_api_detector_health_route_reports_missing_model(tmp_path):
     assert body["exists"] is False
     assert body["ok"] is False
     assert body["privacy"]["camera_opened"] is False
+
+
+def test_api_llm_health_route_is_local_only(tmp_path):
+    app = create_app(str(tmp_path / "monitorme.db"))
+    client = TestClient(app)
+
+    response = client.get("/assistant/llm/health")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["privacy"]["raw_frame_upload"] is False
+    assert body["privacy"]["external_upload"] is False
+    assert "model_id" in body

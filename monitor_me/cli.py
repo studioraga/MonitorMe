@@ -10,6 +10,7 @@ from .db import MonitorMeDB
 from .detector_health import check_detector_health
 from .evidence_pack import EvidencePackBuilder
 from .local_capture import LocalCameraCaptureRunner, LocalCaptureConfig
+from .llm_client import GemmaMaxConfig, gemma_max_health
 from .model_registry import register_default_models
 from .report_tools import IncidentReportBuilder
 from .tracker_tools import TrackerTools
@@ -35,6 +36,13 @@ def cmd_detector_health(args: argparse.Namespace) -> int:
     )
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0 if result.get("ok") else (0 if args.allow_unhealthy else 3)
+
+
+def cmd_llm_health(args: argparse.Namespace) -> int:
+    config = GemmaMaxConfig.from_env()
+    result = gemma_max_health(config, probe=args.probe)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0 if result.get("ok") else (0 if args.allow_unconfigured else 3)
 
 
 def cmd_init_db(args: argparse.Namespace) -> int:
@@ -159,7 +167,7 @@ def cmd_feedback(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="monitorme", description="MonitorMe Node1 AI Camera Assistant v0.1")
+    parser = argparse.ArgumentParser(prog="monitorme", description="MonitorMe Node1 AI Camera Assistant v0.2")
     parser.add_argument("--db", default="data/events/monitorme.db", help="SQLite DB path")
     sub = parser.add_subparsers(required=True)
 
@@ -169,6 +177,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("init-db", help="Apply migrations and register default model metadata")
     p.set_defaults(func=cmd_init_db)
+
+    p = sub.add_parser("llm-health", help="Show local Gemma/MAX OpenAI-compatible summary configuration")
+    p.add_argument("--allow-unconfigured", action="store_true", help="Return exit 0 when Gemma/MAX is not configured")
+    p.add_argument("--probe", action="store_true", help="Probe the configured MAX /v1/models endpoint")
+    p.set_defaults(func=cmd_llm_health)
 
     p = sub.add_parser("detector-health", help="Validate local YOLO ONNX detector model/runtime without opening camera")
     p.add_argument("--model-id", default="yolo11n-coco-onnx")

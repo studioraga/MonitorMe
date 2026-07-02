@@ -9,6 +9,7 @@ from .db import MonitorMeDB
 from .detector_health import check_detector_health
 from .evidence_pack import EvidencePackBuilder
 from .local_capture import LocalCameraCaptureRunner, LocalCaptureConfig
+from .llm_client import gemma_max_health
 from .model_registry import register_default_models
 from .report_tools import IncidentReportBuilder
 from .tracker_tools import TrackerTools
@@ -96,6 +97,7 @@ def create_app(db_path: str | None = None):
                 "assistant_summary": "POST /assistant/events/{event_id}/summary",
                 "assistant_summaries": "GET /assistant/summaries",
                 "event_contracts": "GET /assistant/event-contracts",
+                "llm_health": "GET /assistant/llm/health",
                 "evidence_pack": "POST /assistant/events/{event_id}/evidence-pack",
                 "incident_report": "POST /assistant/reports/incident",
                 "feedback": "POST /events/{event_id}/feedback",
@@ -108,6 +110,8 @@ def create_app(db_path: str | None = None):
                 "step17c_yolo_onnx_after_motion_gate": True,
                 "step17e_evidence_overlays": True,
                 "node1_ai_camera_assistant_v0_1": True,
+                "node1_ai_camera_assistant_v0_2": True,
+                "gemma_max_raw_frame_upload": False,
             },
         }
 
@@ -177,6 +181,11 @@ def create_app(db_path: str | None = None):
         if not row:
             raise HTTPException(status_code=404, detail=f"session_id not found: {session_id}")
         return row
+
+
+    @app.get("/assistant/llm/health")
+    def assistant_llm_health(probe: bool = False) -> dict[str, Any]:
+        return gemma_max_health(probe=probe)
 
     @app.post("/assistant/ask")
     def ask(req: AskRequest = Body(...)) -> dict[str, Any]:
