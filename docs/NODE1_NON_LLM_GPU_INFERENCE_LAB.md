@@ -242,3 +242,119 @@ python -m monitor_me.cli gpu-lab-synthetic --scenario sparse
 python -m monitor_me.cli gpu-lab-synthetic --scenario mixed
 python -m monitor_me.cli gpu-lab-synthetic --scenario dense
 ```
+
+## Phase 1 — CPU ISP rolling line-buffer filters
+
+Phase 1 extends the native lab with CPU-only ISP filters. The scope is a
+self-contained memory-locality lab and does not depend on camera semantics,
+YOLO labels, VLM summaries, or external services.
+
+### Implemented CPU ISP filters
+
+- `blur`: 3x3 box blur
+- `sharpen`: 3x3 cross sharpen
+- `edge` / `conv-edge`: 3x3 Laplacian-style edge response
+- `sobel-x`: horizontal Sobel response
+- `sobel-y`: vertical Sobel response
+- `sobel-mag`: Sobel magnitude
+
+### Rolling 3-row buffer contract
+
+The implementation uses a true rolling line buffer. It does not reload
+`y-1`, `y`, and `y+1` from scratch for every output row. Instead it initializes
+three rows, computes one output row, rotates row ownership, and loads only the
+new bottom row:
+
+```text
+line0 = clamp(y - 1)
+line1 = y
+line2 = clamp(y + 1)
+
+for y in output rows:
+  compute 3x3 window from line0/line1/line2
+  line0 <- line1
+  line1 <- line2
+  line2 <- clamp(y + 2)
+```
+
+This gives the CPU baseline needed before the later Phase 2 CUDA shared-memory
+tiled implementation.
+
+### PGM/PPM I/O
+
+The native binary now supports binary P5 PGM and P6 PPM input for ISP testing.
+PPM input is converted to grayscale before filtering. Output can be written as
+PGM or as grayscale-expanded PPM.
+
+```bash
+native/node1_non_llm_gpu_inference_lab/build-cpu/node1_non_llm_gpu_lab \
+  --mode isp-pgm \
+  --input input.pgm \
+  --output output.pgm \
+  --isp-filter sobel-mag
+```
+
+Synthetic mode is useful for reproducible tests:
+
+```bash
+native/node1_non_llm_gpu_inference_lab/build-cpu/node1_non_llm_gpu_lab \
+  --mode isp-synthetic \
+  --isp-filter sobel-mag \
+  --width 64 \
+  --height 48
+```
+
+### Facts-only evidence safety
+
+The ISP output is metrics-only. It does not emit object labels, person labels,
+identity, intent, behavior, weapon, or suspiciousness claims. Its schema is:
+
+```text
+node1_non_llm_isp_filters.v0.1
+```
+
+Key fields:
+
+```text
+filter
+pixels_processed
+bytes_read
+bytes_written
+output_min / output_max / output_mean
+edge_energy
+focus_score
+noise_score
+lighting_delta
+saturation_pixels / saturation_ratio
+timing
+facts_only=true
+```
+
+### Phase 1 validation plan
+
+```bash
+cd native/node1_non_llm_gpu_inference_lab
+cmake -S . -B build-cpu -DCMAKE_BUILD_TYPE=Release
+cmake --build build-cpu -j"$(nproc)"
+./build-cpu/node1_non_llm_gpu_lab_selftest
+./build-cpu/node1_non_llm_gpu_lab --mode isp-synthetic --isp-filter blur --width 64 --height 48
+./build-cpu/node1_non_llm_gpu_lab --mode isp-synthetic --isp-filter sharpen --width 64 --height 48
+./build-cpu/node1_non_llm_gpu_lab --mode isp-synthetic --isp-filter edge --width 64 --height 48
+./build-cpu/node1_non_llm_gpu_lab --mode isp-synthetic --isp-filter sobel-x --width 64 --height 48
+./build-cpu/node1_non_llm_gpu_lab --mode isp-synthetic --isp-filter sobel-y --width 64 --height 48
+./build-cpu/node1_non_llm_gpu_lab --mode isp-synthetic --isp-filter sobel-mag --width 64 --height 48
+```
+
+Python/CLI validation:
+
+```bash
+python -m pytest -q tests/test_node1_isp_filters_phase1.py
+MONITORME_GPU_LAB_BIN=native/node1_non_llm_gpu_inference_lab/build-cpu/node1_non_llm_gpu_lab \
+  python -m monitor_me.cli gpu-lab-isp-synthetic --filter sobel-mag --width 64 --height 48
+```
+
+### Out of scope for Phase 1
+
+Phase 1 does not add CUDA ISP kernels yet. The next phase should implement
+shared-memory tiled CUDA kernels and compare CPU rolling-buffer output against
+CUDA output.

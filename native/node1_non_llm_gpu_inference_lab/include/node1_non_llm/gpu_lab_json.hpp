@@ -1,6 +1,7 @@
 #pragma once
 
 #include "node1_non_llm/gpu_lab_types.hpp"
+#include "node1_non_llm/isp_filters.hpp"
 
 #include <cstdint>
 #include <string>
@@ -15,5 +16,6 @@ std::string uint32_vector_json(const std::vector<std::uint32_t>& values);
 std::string float_vector_json(const std::vector<float>& values);
 std::string frame_analysis_json(const FrameAnalysis& analysis);
 std::string audio_analysis_json(const AudioEnergyAnalysis& analysis);
+std::string isp_filter_analysis_json(const IspFilterAnalysis& analysis, bool include_output = false);
 
 } // namespace node1_non_llm

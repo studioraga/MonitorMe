@@ -233,6 +233,28 @@ class Node1NonLLMGpuLabRunner:
             cmd.append("--gpu")
         return self._run_json(cmd)
 
+    def run_isp_synthetic(self, *, filter_name: str = "sobel-mag", width: int = 64, height: int = 48) -> dict[str, Any]:
+        binary = self.binary_path
+        if not binary.exists():
+            return {
+                "ok": False,
+                "schema": GPU_LAB_SCHEMA,
+                "error": f"native binary not found: {binary}",
+                "binary_path": str(binary),
+            }
+        cmd = [
+            str(binary),
+            "--mode", "isp-synthetic",
+            "--isp-filter", filter_name,
+            "--width", str(width),
+            "--height", str(height),
+        ]
+        result = self._run_json(cmd)
+        result["schema"] = GPU_LAB_SCHEMA
+        result["source"] = "native_binary"
+        result["binary_path"] = str(binary)
+        return result
+
     def analyze_frames(self, *, previous_frame: Any, current_frame: Any) -> dict[str, Any]:
         prev_gray = frame_to_gray_u8(previous_frame)
         curr_gray = frame_to_gray_u8(current_frame)

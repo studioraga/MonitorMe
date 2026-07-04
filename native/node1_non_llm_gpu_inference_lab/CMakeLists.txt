@@ -12,6 +12,8 @@ add_library(node1_non_llm_gpu_lab_core
     src/gpu_lab_timing.cpp
     src/gpu_lab_json.cpp
     src/gpu_lab_cpu.cpp
+    src/isp_filters_cpu.cpp
+    src/isp_pnm_io.cpp
 )
 target_include_directories(node1_non_llm_gpu_lab_core
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include

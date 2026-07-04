@@ -777,3 +777,30 @@ Run validation:
 ./scripts/validate_node1_ai_camera_assistant_v041.sh
 python -m pytest -q
 ```
+
+### Node1 non-LLM GPU lab Phase 1: CPU ISP filters
+
+The native `node1_non_llm_gpu_inference_lab` now includes a CPU ISP
+memory-locality lab with a true rolling 3-row line buffer. Supported filters are
+`blur`, `sharpen`, `edge`, `sobel-x`, `sobel-y`, and `sobel-mag`, with binary
+PGM/PPM input/output support for deterministic validation.
+
+Example:
+
+```bash
+cd native/node1_non_llm_gpu_inference_lab
+cmake -S . -B build-cpu -DCMAKE_BUILD_TYPE=Release
+cmake --build build-cpu -j"$(nproc)"
+./build-cpu/node1_non_llm_gpu_lab_selftest
+./build-cpu/node1_non_llm_gpu_lab --mode isp-synthetic --isp-filter sobel-mag --width 64 --height 48
+```
+
+MonitorMe CLI wrapper:
+
+```bash
+MONITORME_GPU_LAB_BIN=native/node1_non_llm_gpu_inference_lab/build-cpu/node1_non_llm_gpu_lab \
+  python -m monitor_me.cli gpu-lab-isp-synthetic --filter sobel-mag --width 64 --height 48
+```
+
+The ISP path emits only image-processing workload metrics and no object,
+identity, behavior, or intent claims.

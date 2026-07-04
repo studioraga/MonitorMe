@@ -150,3 +150,88 @@ compute-sanitizer --tool memcheck ./build/node1_non_llm_gpu_lab --mode synthetic
 compute-sanitizer --tool memcheck ./build/node1_non_llm_gpu_lab --mode synthetic --scenario mixed --gpu
 compute-sanitizer --tool memcheck ./build/node1_non_llm_gpu_lab --mode synthetic --scenario dense --gpu
 ```
+
+## Phase 1: CPU ISP rolling line-buffer filters
+
+Phase 1 adds a CPU-only ISP memory-locality lab. It is intentionally separate
+from camera semantics and does not emit object, person, identity, behavior, or
+intent claims. It emits only deterministic image-processing metrics.
+
+Supported filters:
+
+- `blur` — 3x3 box blur with clamped borders
+- `sharpen` — 3x3 cross sharpen kernel
+- `edge` / `conv-edge` — 3x3 Laplacian-style edge response
+- `sobel-x` — horizontal Sobel response
+- `sobel-y` — vertical Sobel response
+- `sobel-mag` — Sobel magnitude
+
+The CPU implementation uses a true rolling 3-row line buffer:
+
+```text
+initial load: y-1, y, y+1
+for each output row:
+  compute with line0/line1/line2
+  rotate line0 <- line1, line1 <- line2
+  load only the new y+2 row into line2
+```
+
+This is the Phase 1 foundation for the later Phase 2 CUDA shared-memory tiled
+ISP kernels.
+
+### Synthetic ISP smoke
+
+```bash
+./build-cpu/node1_non_llm_gpu_lab --mode isp-synthetic --isp-filter sobel-mag --width 64 --height 48
+./build-cpu/node1_non_llm_gpu_lab --mode isp-synthetic --isp-filter blur --width 64 --height 48 --include-output
+```
+
+### PGM/PPM file mode
+
+The native binary supports binary P5 PGM and P6 PPM input. PPM is converted to
+grayscale before filtering.
+
+```bash
+./build-cpu/node1_non_llm_gpu_lab \
+  --mode isp-pgm \
+  --input input.pgm \
+  --output output.pgm \
+  --isp-filter sobel-mag
+```
+
+If `--output` ends in `.ppm`, the grayscale output is expanded to RGB PPM;
+otherwise output is written as P5 PGM.
+
+### ISP output contract
+
+The top-level JSON includes an `isp` object with the schema
+`node1_non_llm_isp_filters.v0.1`. Example fields:
+
+```json
+{
+  "backend": "cpu",
+  "filter": "sobel-mag",
+  "pixels_processed": 3072,
+  "bytes_read": 3072,
+  "bytes_written": 3072,
+  "edge_energy": 146.97,
+  "focus_score": 4279.25,
+  "noise_score": 96.69,
+  "lighting_delta": 3.64,
+  "saturation_ratio": 0.22,
+  "facts_only": true
+}
+```
+
+### Phase 1 validation
+
+```bash
+cmake -S . -B build-cpu -DCMAKE_BUILD_TYPE=Release
+cmake --build build-cpu -j"$(nproc)"
+./build-cpu/node1_non_llm_gpu_lab_selftest
+./build-cpu/node1_non_llm_gpu_lab --mode isp-synthetic --isp-filter sobel-mag --width 64 --height 48
+```
+
+The self-test validates rolling-buffer output against a naive 3x3 reference for
+all filters, known-value kernels, PGM/PPM roundtrip I/O, and ISP JSON safety
+fields.

@@ -78,6 +78,14 @@ def cmd_gpu_lab_synthetic(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 3
 
 
+def cmd_gpu_lab_isp_synthetic(args: argparse.Namespace) -> int:
+    config = GpuLabConfig.from_env(enabled=True)
+    runner = Node1NonLLMGpuLabRunner(config)
+    result = runner.run_isp_synthetic(filter_name=args.filter, width=args.width, height=args.height)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0 if result.get("ok") else 3
+
+
 def cmd_init_db(args: argparse.Namespace) -> int:
     db = _db(args)
     register_default_models(db)
@@ -295,6 +303,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("gpu-lab-synthetic", help="Run native C++/CUDA sparse/mixed/dense synthetic profiler")
     p.add_argument("--scenario", default="mixed", choices=["sparse", "mixed", "dense"])
     p.set_defaults(func=cmd_gpu_lab_synthetic)
+
+    p = sub.add_parser("gpu-lab-isp-synthetic", help="Run CPU ISP rolling line-buffer synthetic filter validation")
+    p.add_argument("--filter", default="sobel-mag", choices=["blur", "sharpen", "edge", "sobel-x", "sobel-y", "sobel-mag"])
+    p.add_argument("--width", type=int, default=64)
+    p.add_argument("--height", type=int, default=48)
+    p.set_defaults(func=cmd_gpu_lab_isp_synthetic)
 
     p = sub.add_parser("detector-health", help="Validate local YOLO ONNX detector model/runtime without opening camera")
     p.add_argument("--model-id", default="yolo11n-coco-onnx")

@@ -125,10 +125,13 @@ std::vector<float> make_synthetic_audio(int sample_count) {
 }
 
 void print_usage() {
-    std::cerr << "node1_non_llm_gpu_lab --mode synthetic|analyze-raw-gray|audio-raw-f32 [options]\n"
+    std::cerr << "node1_non_llm_gpu_lab --mode synthetic|analyze-raw-gray|audio-raw-f32|isp-synthetic|isp-pgm [options]\n"
               << "  --scenario sparse|mixed|dense       synthetic frame pattern\n"
               << "  --prev previous.gray --curr current.gray --width W --height H\n"
               << "  --audio samples.f32 --audio-samples N --audio-window-samples N\n"
+              << "  --isp-filter blur|sharpen|edge|sobel-x|sobel-y|sobel-mag\n"
+              << "  --input frame.pgm|frame.ppm --output filtered.pgm|filtered.ppm\n"
+              << "  --include-output                   include ISP output pixels in JSON, useful for tiny tests\n"
               << "  --gpu                              also run CUDA backend when compiled with CUDA\n";
 }
 
@@ -173,7 +176,7 @@ int main(int argc, char** argv) {
             }
             cpu_frame = analyze_gray_frames_cpu(prev.data(), curr.data(), tile_cfg);
             ran_frame = true;
-        } else if (mode != "audio-raw-f32") {
+        } else if (mode != "audio-raw-f32" && mode != "isp-synthetic" && mode != "isp-pgm") {
             throw std::runtime_error("unknown mode: " + mode);
         }
 
@@ -206,6 +209,52 @@ int main(int argc, char** argv) {
             ran_audio = true;
         }
 
+
+        IspFilterAnalysis cpu_isp;
+        bool ran_isp = false;
+        std::string isp_input_path;
+        std::string isp_output_path;
+        if (mode == "isp-synthetic" || mode == "isp-pgm") {
+            IspFilterKind filter_kind;
+            const std::string filter_name = arg_string(args, "isp-filter", "sobel-mag");
+            if (!parse_isp_filter_kind(filter_name, filter_kind)) {
+                throw std::runtime_error("unknown ISP filter: " + filter_name);
+            }
+
+            ImageU8 gray_image;
+            if (mode == "isp-synthetic") {
+                gray_image = make_synthetic_isp_image(width, height);
+            } else {
+                isp_input_path = arg_string(args, "input", "");
+                if (isp_input_path.empty()) {
+                    throw std::runtime_error("--input is required for --mode isp-pgm");
+                }
+                gray_image = image_to_gray_u8(read_pnm(isp_input_path));
+            }
+
+            IspFilterConfig isp_cfg;
+            isp_cfg.width = gray_image.width;
+            isp_cfg.height = gray_image.height;
+            isp_cfg.filter = filter_kind;
+            isp_cfg.collect_output = true;
+            cpu_isp = apply_isp_filter_cpu_rolling(gray_image.data.data(), isp_cfg);
+            ran_isp = true;
+
+            isp_output_path = arg_string(args, "output", "");
+            if (!isp_output_path.empty()) {
+                ImageU8 out_image;
+                out_image.width = cpu_isp.width;
+                out_image.height = cpu_isp.height;
+                out_image.channels = 1;
+                out_image.data = cpu_isp.output;
+                if (isp_output_path.size() >= 4 && isp_output_path.substr(isp_output_path.size() - 4) == ".ppm") {
+                    write_ppm(isp_output_path, out_image);
+                } else {
+                    write_pgm(isp_output_path, out_image);
+                }
+            }
+        }
+
         std::ostringstream os;
         os << "{";
         os << "\"ok\":true,";
@@ -229,6 +278,11 @@ int main(int argc, char** argv) {
 #else
         os << ",\"audio_cuda\":null";
 #endif
+        os << ",\"isp\":" << (ran_isp ? isp_filter_analysis_json(cpu_isp, has_flag(args, "include-output")) : "null");
+        if (ran_isp) {
+            os << ",\"isp_input\":\"" << json_escape(isp_input_path) << "\"";
+            os << ",\"isp_output\":\"" << json_escape(isp_output_path) << "\"";
+        }
         os << "}";
         std::cout << os.str() << "\n";
         return 0;

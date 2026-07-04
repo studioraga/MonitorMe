@@ -3,10 +3,12 @@
 
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
 #include <iostream>
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include "node1_non_llm/isp_filters.hpp"
 
 using namespace node1_non_llm;
 
@@ -137,6 +139,102 @@ void test_json_helpers() {
     require(audio_json.find("\"timing\":") != std::string::npos, "audio JSON missing timing");
 }
 
+void test_isp_filter_reference_equivalence() {
+    const int width = 9;
+    const int height = 7;
+    ImageU8 image = make_synthetic_isp_image(width, height);
+    for (IspFilterKind filter : {
+            IspFilterKind::Blur3x3,
+            IspFilterKind::Sharpen3x3,
+            IspFilterKind::Edge3x3,
+            IspFilterKind::SobelX,
+            IspFilterKind::SobelY,
+            IspFilterKind::SobelMag}) {
+        IspFilterConfig cfg;
+        cfg.width = width;
+        cfg.height = height;
+        cfg.filter = filter;
+        cfg.collect_output = true;
+        const auto rolling = apply_isp_filter_cpu_rolling(image.data.data(), cfg);
+        const auto ref = apply_isp_filter_cpu_reference(image.data.data(), cfg);
+        require(rolling.ok, std::string("rolling ISP failed for ") + isp_filter_name(filter) + ": " + rolling.error);
+        require(ref.ok, std::string("reference ISP failed for ") + isp_filter_name(filter) + ": " + ref.error);
+        require(rolling.output == ref.output, std::string("rolling/reference mismatch for ") + isp_filter_name(filter));
+        require(rolling.pixels_processed == static_cast<std::uint64_t>(width * height), "ISP pixels_processed mismatch");
+        require(rolling.bytes_read == static_cast<std::uint64_t>(width * height), "ISP bytes_read mismatch");
+        require(rolling.bytes_written == static_cast<std::uint64_t>(width * height), "ISP bytes_written mismatch");
+        require(rolling.timing.total_ms >= 0.0, "ISP timing missing");
+    }
+}
+
+void test_isp_known_values() {
+    ImageU8 image;
+    image.width = 5;
+    image.height = 5;
+    image.channels = 1;
+    image.data.assign(25, 0U);
+    image.data[12] = 255U;
+
+    IspFilterConfig cfg;
+    cfg.width = image.width;
+    cfg.height = image.height;
+    cfg.collect_output = true;
+
+    cfg.filter = IspFilterKind::Blur3x3;
+    auto blur = apply_isp_filter_cpu_rolling(image.data.data(), cfg);
+    require(blur.ok, "blur failed");
+    require(static_cast<int>(blur.output[12]) == 28, "blur center expected rounded 255/9 = 28");
+
+    cfg.filter = IspFilterKind::Sharpen3x3;
+    auto sharpen = apply_isp_filter_cpu_rolling(image.data.data(), cfg);
+    require(sharpen.ok, "sharpen failed");
+    require(static_cast<int>(sharpen.output[12]) == 255, "sharpen center expected clamp to 255");
+
+    cfg.filter = IspFilterKind::Edge3x3;
+    auto edge = apply_isp_filter_cpu_rolling(image.data.data(), cfg);
+    require(edge.ok, "edge failed");
+    require(static_cast<int>(edge.output[12]) == 255, "edge center expected clamp to 255");
+
+    cfg.filter = IspFilterKind::SobelMag;
+    auto sobel = apply_isp_filter_cpu_rolling(image.data.data(), cfg);
+    require(sobel.ok, "sobel-mag failed");
+    require(sobel.output.size() == 25, "sobel output size mismatch");
+}
+
+void test_pgm_ppm_io() {
+    const auto base = std::filesystem::temp_directory_path() / "node1_isp_phase1_selftest";
+    const auto pgm_path = base.string() + ".pgm";
+    const auto ppm_path = base.string() + ".ppm";
+
+    ImageU8 image = make_synthetic_isp_image(8, 6);
+    write_pgm(pgm_path, image);
+    ImageU8 pgm = read_pnm(pgm_path);
+    require(pgm.width == 8 && pgm.height == 6 && pgm.channels == 1, "PGM roundtrip shape mismatch");
+    require(pgm.data == image.data, "PGM roundtrip data mismatch");
+
+    write_ppm(ppm_path, image);
+    ImageU8 ppm = read_pnm(ppm_path);
+    require(ppm.width == 8 && ppm.height == 6 && ppm.channels == 3, "PPM roundtrip shape mismatch");
+    ImageU8 gray = image_to_gray_u8(ppm);
+    require(gray.data == image.data, "PPM gray conversion mismatch");
+
+    std::filesystem::remove(pgm_path);
+    std::filesystem::remove(ppm_path);
+}
+
+void test_isp_json() {
+    ImageU8 image = make_synthetic_isp_image(8, 6);
+    IspFilterConfig cfg;
+    cfg.width = image.width;
+    cfg.height = image.height;
+    cfg.filter = IspFilterKind::SobelMag;
+    auto analysis = apply_isp_filter_cpu_rolling(image.data.data(), cfg);
+    const std::string json = isp_filter_analysis_json(analysis, false);
+    require(json.find("\"schema\":\"node1_non_llm_isp_filters.v0.1\"") != std::string::npos, "ISP JSON missing schema");
+    require(json.find("\"facts_only\":true") != std::string::npos, "ISP JSON missing facts_only");
+    require(json.find("\"edge_energy\":") != std::string::npos, "ISP JSON missing edge_energy");
+}
+
 } // namespace
 
 int main() {
@@ -146,6 +244,10 @@ int main() {
         test_cpu_frame_routes();
         test_cpu_audio();
         test_json_helpers();
+        test_isp_filter_reference_equivalence();
+        test_isp_known_values();
+        test_pgm_ppm_io();
+        test_isp_json();
         std::cout << "node1_non_llm_gpu_lab_selftest PASS\n";
         return 0;
     } catch (const std::exception& exc) {

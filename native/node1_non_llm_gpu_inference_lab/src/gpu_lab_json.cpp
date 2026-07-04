@@ -53,6 +53,18 @@ std::string uint32_vector_json(const std::vector<std::uint32_t>& values) {
     return os.str();
 }
 
+
+std::string uint8_vector_json(const std::vector<std::uint8_t>& values) {
+    std::ostringstream os;
+    os << "[";
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        if (i) os << ",";
+        os << static_cast<int>(values[i]);
+    }
+    os << "]";
+    return os.str();
+}
+
 std::string float_vector_json(const std::vector<float>& values) {
     std::ostringstream os;
     os << "[";
@@ -107,6 +119,40 @@ std::string audio_analysis_json(const AudioEnergyAnalysis& a) {
     os << "\"active_windows\":" << a.active_windows << ",";
     os << "\"rms\":" << float_vector_json(a.rms) << ",";
     os << "\"timing\":" << stage_timing_json(a.timing);
+    os << "}";
+    return os.str();
+}
+
+std::string isp_filter_analysis_json(const IspFilterAnalysis& a, bool include_output) {
+    std::ostringstream os;
+    os << "{";
+    os << "\"ok\":" << bool_json(a.ok) << ",";
+    os << "\"backend\":\"" << json_escape(a.backend) << "\",";
+    os << "\"schema\":\"" << json_escape(a.schema) << "\",";
+    os << "\"profile\":\"" << json_escape(a.profile) << "\",";
+    os << "\"filter\":\"" << json_escape(a.filter) << "\",";
+    os << "\"error\":\"" << json_escape(a.error) << "\",";
+    os << "\"width\":" << a.width << ",";
+    os << "\"height\":" << a.height << ",";
+    os << "\"channels\":" << a.channels << ",";
+    os << "\"pixels_processed\":" << a.pixels_processed << ",";
+    os << "\"bytes_read\":" << a.bytes_read << ",";
+    os << "\"bytes_written\":" << a.bytes_written << ",";
+    os << "\"output_min\":" << a.output_min << ",";
+    os << "\"output_max\":" << a.output_max << ",";
+    os << "\"output_mean\":" << a.output_mean << ",";
+    os << "\"edge_energy\":" << a.edge_energy << ",";
+    os << "\"focus_score\":" << a.focus_score << ",";
+    os << "\"noise_score\":" << a.noise_score << ",";
+    os << "\"lighting_delta\":" << a.lighting_delta << ",";
+    os << "\"saturation_pixels\":" << a.saturation_pixels << ",";
+    os << "\"saturation_ratio\":" << a.saturation_ratio << ",";
+    os << "\"facts_only\":true,";
+    os << "\"note\":\"CPU ISP filter metrics only; no object, identity, behavior, or intent claim is emitted.\",";
+    os << "\"timing\":" << stage_timing_json(a.timing);
+    if (include_output) {
+        os << ",\"output\":" << uint8_vector_json(a.output);
+    }
     os << "}";
     return os.str();
 }

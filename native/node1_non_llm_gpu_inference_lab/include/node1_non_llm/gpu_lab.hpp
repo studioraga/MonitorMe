@@ -1,6 +1,7 @@
 #pragma once
 
 #include "node1_non_llm/gpu_lab_types.hpp"
+#include "node1_non_llm/isp_filters.hpp"
 
 namespace node1_non_llm {
 
