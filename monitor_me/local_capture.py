@@ -13,6 +13,7 @@ from .hash_utils import sha256_file
 from .keyframe_vlm import KeyframeVLMAnalysisService
 from .short_clip_vlm import ShortClipVLMExperimentService
 from .model_registry import register_default_models
+from .non_llm_gpu_lab import GPU_LAB_MODEL_ID, GPU_LAB_SCHEMA, GpuLabConfig, Node1NonLLMGpuLabRunner
 from .overlays import OverlayBox, render_evidence_overlay
 from .policy import allow_node1_local_camera
 from .time_utils import now_iso
@@ -83,6 +84,20 @@ class LocalCaptureConfig:
     smolvlm2_clip_frame_count: int = 8
     smolvlm2_clip_dir_name: str = "short_clips"
 
+    # Node1 non-LLM C++/CUDA GPU inference lab. Disabled by default and runs
+    # only after a local motion/keyframe trigger. It stores workload facts
+    # such as tile masks and sparse/mixed/dense route decisions; it does not
+    # identify people, infer intent, or upload frames.
+    gpu_lab_enabled: bool = False
+    gpu_lab_binary: str = ""
+    gpu_lab_tile_cols: int = 8
+    gpu_lab_tile_rows: int = 4
+    gpu_lab_pixel_threshold: int = 30
+    gpu_lab_sparse_threshold: int = 8
+    gpu_lab_dense_threshold: int = 24
+    gpu_lab_prefer_cuda: bool = True
+    gpu_lab_allow_python_fallback: bool = True
+
 
 @dataclass(frozen=True)
 class MotionResult:
@@ -112,6 +127,7 @@ class LocalCaptureResult:
     event_contract_ids: list[str]
     vlm_analysis_ids: list[str]
     smolvlm2_experiment_ids: list[str]
+    gpu_profile_event_ids: list[str]
     started_at: str
     ended_at: str
     detector: dict[str, Any]
@@ -296,6 +312,22 @@ class LocalCameraCaptureRunner:
             },
             enabled=cfg.smolvlm2_enabled,
         )
+        self.db.upsert_model(
+            GPU_LAB_MODEL_ID,
+            role="native_gpu_workload_profiler",
+            provider="cpp-cuda-sidecar",
+            path=cfg.gpu_lab_binary,
+            metadata={
+                "stage": "node1-non-llm-gpu-inference-lab-v0.1",
+                "privacy": "Runs locally after a motion/keyframe trigger; stores workload routing facts only.",
+                "enabled_for_capture": cfg.gpu_lab_enabled,
+                "tile_grid": [cfg.gpu_lab_tile_cols, cfg.gpu_lab_tile_rows],
+                "prefer_cuda": cfg.gpu_lab_prefer_cuda,
+                "allow_python_fallback": cfg.gpu_lab_allow_python_fallback,
+                "facts_only": True,
+            },
+            enabled=cfg.gpu_lab_enabled,
+        )
         session_id = self.db.create_session(
             camera_id=cfg.camera_id,
             source_node="node1",
@@ -344,11 +376,30 @@ class LocalCameraCaptureRunner:
         event_contract_ids: list[str] = []
         vlm_analysis_ids: list[str] = []
         smolvlm2_experiment_ids: list[str] = []
+        gpu_profile_event_ids: list[str] = []
         summary_service = AssistantSummaryService(self.db)
         vlm_service = KeyframeVLMAnalysisService(self.db, vlm=self.keyframe_vlm_client) if cfg.vlm_enabled else None
         smolvlm2_service = ShortClipVLMExperimentService(self.db, vlm=self.short_clip_vlm_client) if cfg.smolvlm2_enabled else None
+        gpu_lab_runner = (
+            Node1NonLLMGpuLabRunner(
+                GpuLabConfig(
+                    enabled=cfg.gpu_lab_enabled,
+                    binary_path=cfg.gpu_lab_binary,
+                    tile_cols=cfg.gpu_lab_tile_cols,
+                    tile_rows=cfg.gpu_lab_tile_rows,
+                    pixel_threshold=cfg.gpu_lab_pixel_threshold,
+                    sparse_threshold=cfg.gpu_lab_sparse_threshold,
+                    dense_threshold=cfg.gpu_lab_dense_threshold,
+                    prefer_cuda=cfg.gpu_lab_prefer_cuda,
+                    allow_python_fallback=cfg.gpu_lab_allow_python_fallback,
+                )
+            )
+            if cfg.gpu_lab_enabled
+            else None
+        )
         recent_frames: deque[tuple[int, Any]] = deque(maxlen=max(1, int(cfg.smolvlm2_clip_frame_count)))
         manifest_frames: list[dict[str, Any]] = []
+        previous_frame_for_gpu_lab: Any | None = None
         last_event_time = 0.0
         error: str | None = None
         ok = False
@@ -367,6 +418,8 @@ class LocalCameraCaptureRunner:
                 if cfg.smolvlm2_enabled:
                     recent_frames.append((frame_id, frame.copy() if hasattr(frame, "copy") else frame))
                 motion = gate.evaluate(frame)
+                gpu_lab_previous_frame = previous_frame_for_gpu_lab
+                previous_frame_for_gpu_lab = frame.copy() if hasattr(frame, "copy") else frame
                 now_mono = time.monotonic()
                 should_emit = motion.motion and (now_mono - last_event_time >= cfg.min_event_gap_sec)
                 if should_emit:
@@ -429,6 +482,24 @@ class LocalCameraCaptureRunner:
                     )
                     object_event_ids.extend(child_ids)
                     detector_status["object_events"] = int(detector_status.get("object_events", 0)) + len(child_ids)
+
+                    gpu_profile: dict[str, Any] | None = None
+                    gpu_profile_event_id: str | None = None
+                    if gpu_lab_runner is not None and gpu_lab_previous_frame is not None:
+                        gpu_profile = self._profile_gpu_workload(
+                            runner=gpu_lab_runner,
+                            previous_frame=gpu_lab_previous_frame,
+                            current_frame=frame,
+                            cfg=cfg,
+                            session_id=session_id,
+                            parent_event_id=motion_id,
+                            frame_id=frame_id,
+                            event_ts=event_ts,
+                            artifact_id=artifact_id,
+                        )
+                        gpu_profile_event_id = gpu_profile.get("event_id") if gpu_profile else None
+                        if gpu_profile_event_id:
+                            gpu_profile_event_ids.append(str(gpu_profile_event_id))
 
                     overlay_result: dict[str, Any] | None = None
                     overlay_artifact_id: str | None = None
@@ -545,6 +616,9 @@ class LocalCameraCaptureRunner:
                             "smolvlm2_status": (smolvlm2_result or {}).get("status") if 'smolvlm2_result' in locals() else None,
                             "short_clip_artifact_id": short_clip_artifact_id,
                             "short_clip_path": short_clip_path,
+                            "gpu_lab_enabled": bool(cfg.gpu_lab_enabled),
+                            "gpu_profile_event_id": gpu_profile_event_id,
+                            "gpu_profile": gpu_profile,
                         }
                     )
             ok = True
@@ -576,6 +650,19 @@ class LocalCameraCaptureRunner:
             "event_contract_ids": event_contract_ids,
             "vlm_analysis_ids": vlm_analysis_ids,
             "smolvlm2_experiment_ids": smolvlm2_experiment_ids,
+            "gpu_profile_event_ids": gpu_profile_event_ids,
+            "gpu_lab": {
+                "enabled": bool(cfg.gpu_lab_enabled),
+                "model_id": GPU_LAB_MODEL_ID,
+                "profile_count": len(gpu_profile_event_ids),
+                "tile_grid": [int(cfg.gpu_lab_tile_cols), int(cfg.gpu_lab_tile_rows)],
+                "pixel_threshold": int(cfg.gpu_lab_pixel_threshold),
+                "sparse_threshold": int(cfg.gpu_lab_sparse_threshold),
+                "dense_threshold": int(cfg.gpu_lab_dense_threshold),
+                "prefer_cuda": bool(cfg.gpu_lab_prefer_cuda),
+                "allow_python_fallback": bool(cfg.gpu_lab_allow_python_fallback),
+                "facts_only": True,
+            },
             "smolvlm2": {
                 "enabled": bool(cfg.smolvlm2_enabled),
                 "model_id": cfg.smolvlm2_model_id,
@@ -630,7 +717,7 @@ class LocalCameraCaptureRunner:
                 "camera.capture.completed",
                 camera_id=cfg.camera_id,
                 session_id=session_id,
-                details={"frames_seen": frames_seen, "motion_events": len(motion_event_ids), "object_events": len(object_event_ids), "assistant_summaries": len(assistant_summary_ids), "vlm_analyses": len(vlm_analysis_ids), "smolvlm2_experiments": len(smolvlm2_experiment_ids)},
+                details={"frames_seen": frames_seen, "motion_events": len(motion_event_ids), "object_events": len(object_event_ids), "assistant_summaries": len(assistant_summary_ids), "vlm_analyses": len(vlm_analysis_ids), "smolvlm2_experiments": len(smolvlm2_experiment_ids), "gpu_profiles": len(gpu_profile_event_ids)},
             )
         return LocalCaptureResult(
             ok=ok,
@@ -651,11 +738,88 @@ class LocalCameraCaptureRunner:
             event_contract_ids=event_contract_ids,
             vlm_analysis_ids=vlm_analysis_ids,
             smolvlm2_experiment_ids=smolvlm2_experiment_ids,
+            gpu_profile_event_ids=gpu_profile_event_ids,
             started_at=started_at,
             ended_at=ended_at,
             detector=detector_status,
             error=error,
         )
+
+    def _profile_gpu_workload(
+        self,
+        *,
+        runner: Node1NonLLMGpuLabRunner,
+        previous_frame: Any,
+        current_frame: Any,
+        cfg: LocalCaptureConfig,
+        session_id: str,
+        parent_event_id: str,
+        frame_id: int,
+        event_ts: str,
+        artifact_id: str,
+    ) -> dict[str, Any]:
+        try:
+            result = runner.analyze_frames(previous_frame=previous_frame, current_frame=current_frame)
+            frame_result = result.get("frame") or {}
+            label = str(frame_result.get("path") or "unavailable")
+            confidence = float(frame_result.get("changed_ratio") or 0.0)
+            profile_event_id = self.db.insert_event(
+                parent_event_id=parent_event_id,
+                camera_id=cfg.camera_id,
+                session_id=session_id,
+                frame_id=frame_id,
+                ts=event_ts,
+                event_type="gpu_workload_profiled",
+                severity="info" if result.get("ok") else "warning",
+                label=label,
+                confidence=confidence,
+                source_node="node1",
+                source_kind="local_v4l2",
+                model_id=GPU_LAB_MODEL_ID,
+                artifact_id=artifact_id,
+                attrs={
+                    "schema": GPU_LAB_SCHEMA,
+                    "parent_motion_event_id": parent_event_id,
+                    "keyframe_artifact_id": artifact_id,
+                    "native_binary_available": result.get("native_binary_available", result.get("source") == "native_binary"),
+                    "source": result.get("source"),
+                    "binary_path": result.get("binary_path"),
+                    "cuda_compiled": result.get("cuda_compiled"),
+                    "frame": frame_result,
+                    "frame_cuda": result.get("frame_cuda"),
+                    "routing_decision": label,
+                    "tile_mask_hex": frame_result.get("tile_mask_hex"),
+                    "active_tiles": frame_result.get("active_tiles"),
+                    "changed_ratio": frame_result.get("changed_ratio"),
+                    "privacy": {"external_upload": False, "identity": False, "intent": False},
+                    "note": "Non-LLM CPU/GPU workload profile emitted after local motion trigger. This is routing metadata, not an object or identity claim.",
+                },
+            )
+            result["event_id"] = profile_event_id
+            self.db.audit(
+                "gpu_lab.profile.create",
+                camera_id=cfg.camera_id,
+                event_id=profile_event_id,
+                session_id=session_id,
+                details={
+                    "parent_event_id": parent_event_id,
+                    "path": label,
+                    "active_tiles": frame_result.get("active_tiles"),
+                    "tile_mask_hex": frame_result.get("tile_mask_hex"),
+                    "source": result.get("source"),
+                },
+            )
+            return result
+        except Exception as exc:
+            self.db.audit(
+                "gpu_lab.profile.failed",
+                outcome="warning",
+                camera_id=cfg.camera_id,
+                event_id=parent_event_id,
+                session_id=session_id,
+                details={"error": str(exc)},
+            )
+            return {"ok": False, "error": str(exc)}
 
     def _load_detector(self, detector_status: dict[str, Any], session_id: str) -> ObjectDetector | None:
         cfg = self.config

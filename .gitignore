@@ -29,3 +29,7 @@ models/object_detection/*.onnx
 !models/object_detection/.gitkeep
 results/models/*
 !results/models/.gitkeep
+
+# Native CMake build outputs
+native/**/build/
+native/**/build-*/

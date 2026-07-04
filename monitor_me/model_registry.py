@@ -60,6 +60,18 @@ DEFAULT_MODELS = [
             "experimental": True,
         },
     ),
+
+    ModelRecord(
+        model_id="node1-non-llm-gpu-lab-v0.1",
+        role="native_gpu_workload_profiler",
+        provider="cpp-cuda-sidecar",
+        enabled=False,
+        metadata={
+            "stage": "node1-non-llm-gpu-inference-lab-v0.1",
+            "privacy": "Disabled by default; computes frame/audio workload masks locally and stores routing facts only.",
+            "facts_only": True,
+        },
+    ),
     ModelRecord(
         model_id="sam2-small",
         role="segmentation_model_future",

@@ -281,6 +281,38 @@ python -m monitor_me.cli --db data/events/monitorme.db feedback <event_id> \
   --reason "operator review"
 ```
 
+
+## Node1 non-LLM GPU inference lab v0.1
+
+MonitorMe now includes an optional native C++/CUDA sidecar under `native/node1_non_llm_gpu_inference_lab/` for deterministic CPU/GPU workload profiling without an LLM in the inference core. It computes frame-difference tile masks, classifies frames into `sparse`, `mixed`, or `dense` routes, and can also analyze batched float32 audio energy windows.
+
+The sidecar is disabled by default. When enabled during `capture-run`, it runs only after a local motion/keyframe trigger and stores `gpu_workload_profiled` child events with routing metadata such as `tile_mask_hex`, `active_tiles`, `changed_ratio`, and CUDA availability. It does not emit person, identity, intent, or behavior claims.
+
+Build on Node1 with CUDA 13.3:
+
+```bash
+cd native/node1_non_llm_gpu_inference_lab
+./scripts/build_node1_gpu_lab.sh
+```
+
+Enable during capture:
+
+```bash
+python -m monitor_me.cli --db data/events/monitorme.db capture-run \
+  --camera-id c922_node1_gate \
+  --device /dev/video0 \
+  --width 1280 \
+  --height 720 \
+  --fps 30 \
+  --fourcc MJPG \
+  --duration-sec 10 \
+  --motion-threshold 1.5 \
+  --gpu-lab-enabled \
+  --gpu-lab-binary native/node1_non_llm_gpu_inference_lab/build/node1_non_llm_gpu_lab
+```
+
+See `docs/NODE1_NON_LLM_GPU_INFERENCE_LAB.md`.
+
 ## Optional API server
 
 Foreground mode:

@@ -16,6 +16,7 @@ from .vlm_client import QwenVLMConfig, qwen_vlm_health
 from .short_clip_vlm import ShortClipVLMExperimentService
 from .smolvlm2_client import SmolVLM2Config, smolvlm2_health
 from .model_registry import register_default_models
+from .non_llm_gpu_lab import GpuLabConfig, Node1NonLLMGpuLabRunner, gpu_lab_health
 from .report_tools import IncidentReportBuilder
 from .tracker_tools import TrackerTools
 
@@ -63,6 +64,20 @@ def cmd_smolvlm2_health(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else (0 if args.allow_unconfigured else 3)
 
 
+def cmd_gpu_lab_health(args: argparse.Namespace) -> int:
+    result = gpu_lab_health(probe=args.probe, enabled=args.enabled)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0 if result.get("ok") else (0 if args.allow_unavailable else 3)
+
+
+def cmd_gpu_lab_synthetic(args: argparse.Namespace) -> int:
+    config = GpuLabConfig.from_env(enabled=True)
+    runner = Node1NonLLMGpuLabRunner(config)
+    result = runner.run_synthetic(scenario=args.scenario)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0 if result.get("ok") else 3
+
+
 def cmd_init_db(args: argparse.Namespace) -> int:
     db = _db(args)
     register_default_models(db)
@@ -100,6 +115,15 @@ def cmd_capture_run(args: argparse.Namespace) -> int:
         smolvlm2_enabled=args.smolvlm2_enabled,
         smolvlm2_model_id=args.smolvlm2_model_id,
         smolvlm2_clip_frame_count=args.smolvlm2_clip_frame_count,
+        gpu_lab_enabled=args.gpu_lab_enabled,
+        gpu_lab_binary=args.gpu_lab_binary,
+        gpu_lab_tile_cols=args.gpu_lab_tile_cols,
+        gpu_lab_tile_rows=args.gpu_lab_tile_rows,
+        gpu_lab_pixel_threshold=args.gpu_lab_pixel_threshold,
+        gpu_lab_sparse_threshold=args.gpu_lab_sparse_threshold,
+        gpu_lab_dense_threshold=args.gpu_lab_dense_threshold,
+        gpu_lab_prefer_cuda=not args.gpu_lab_no_cuda,
+        gpu_lab_allow_python_fallback=not args.gpu_lab_no_python_fallback,
     )
     result = LocalCameraCaptureRunner(db, config).run().as_dict()
     print(json.dumps(result, indent=2, sort_keys=True))
@@ -262,6 +286,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--probe", action="store_true", help="Probe the configured SmolVLM2 /v1/models endpoint")
     p.set_defaults(func=cmd_smolvlm2_health)
 
+    p = sub.add_parser("gpu-lab-health", help="Check optional native C++/CUDA non-LLM GPU workload profiler")
+    p.add_argument("--enabled", action="store_true", help="Report as enabled for this health check")
+    p.add_argument("--probe", action="store_true", help="Run a synthetic native smoke test if the binary exists")
+    p.add_argument("--allow-unavailable", action="store_true", help="Return exit 0 when the native binary is not built yet")
+    p.set_defaults(func=cmd_gpu_lab_health)
+
+    p = sub.add_parser("gpu-lab-synthetic", help="Run native C++/CUDA sparse/mixed/dense synthetic profiler")
+    p.add_argument("--scenario", default="mixed", choices=["sparse", "mixed", "dense"])
+    p.set_defaults(func=cmd_gpu_lab_synthetic)
+
     p = sub.add_parser("detector-health", help="Validate local YOLO ONNX detector model/runtime without opening camera")
     p.add_argument("--model-id", default="yolo11n-coco-onnx")
     p.add_argument("--model-path", default="models/object_detection/yolo11n.onnx")
@@ -297,6 +331,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--smolvlm2-enabled", action="store_true", help="Run optional SmolVLM2 short clip experiment after trigger")
     p.add_argument("--smolvlm2-model-id", default="HuggingFaceTB/SmolVLM2-500M-Video-Instruct")
     p.add_argument("--smolvlm2-clip-frame-count", type=int, default=8)
+    p.add_argument("--gpu-lab-enabled", action="store_true", help="Run non-LLM C++/CUDA workload profiler after motion trigger")
+    p.add_argument("--gpu-lab-binary", default="", help="Path to native node1_non_llm_gpu_lab binary")
+    p.add_argument("--gpu-lab-tile-cols", type=int, default=8)
+    p.add_argument("--gpu-lab-tile-rows", type=int, default=4)
+    p.add_argument("--gpu-lab-pixel-threshold", type=int, default=30)
+    p.add_argument("--gpu-lab-sparse-threshold", type=int, default=8)
+    p.add_argument("--gpu-lab-dense-threshold", type=int, default=24)
+    p.add_argument("--gpu-lab-no-cuda", action="store_true", help="Do not request CUDA backend from native profiler")
+    p.add_argument("--gpu-lab-no-python-fallback", action="store_true", help="Do not emit Python fallback workload profile if native binary is missing")
     p.set_defaults(func=cmd_capture_run)
 
     p = sub.add_parser("events", help="List normalized events")
