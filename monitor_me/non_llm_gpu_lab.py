@@ -92,6 +92,30 @@ def frame_to_gray_u8(frame: Any) -> Any:
     return gray.astype(np.uint8, copy=False)
 
 
+def _validate_tile_contract(
+    *,
+    width: int,
+    height: int,
+    tile_cols: int,
+    tile_rows: int,
+    pixel_threshold: int,
+    sparse_threshold: int,
+    dense_threshold: int,
+) -> None:
+    if width <= 0 or height <= 0:
+        raise ValueError("width and height must be positive")
+    if tile_cols <= 0 or tile_rows <= 0:
+        raise ValueError("tile grid must be positive")
+    if tile_cols * tile_rows > 32:
+        raise ValueError("tile_cols * tile_rows must be <= 32 because the tile mask is uint32_t")
+    if pixel_threshold < 0 or pixel_threshold > 255:
+        raise ValueError("pixel_threshold must be in [0, 255]")
+    if sparse_threshold < 0 or dense_threshold < 0 or sparse_threshold >= dense_threshold:
+        raise ValueError("sparse_threshold must be lower than dense_threshold")
+    if dense_threshold > tile_cols * tile_rows:
+        raise ValueError("dense_threshold cannot exceed tile count")
+
+
 def analyze_gray_frames_python(
     previous_gray: Any,
     current_gray: Any,
@@ -111,10 +135,15 @@ def analyze_gray_frames_python(
     if prev.shape != curr.shape or prev.ndim != 2:
         raise ValueError("previous/current frames must be same-shape grayscale arrays")
     height, width = int(prev.shape[0]), int(prev.shape[1])
-    if tile_cols <= 0 or tile_rows <= 0 or tile_cols * tile_rows > 32:
-        raise ValueError("tile_cols * tile_rows must be in [1, 32]")
-    if sparse_threshold >= dense_threshold:
-        raise ValueError("sparse_threshold must be lower than dense_threshold")
+    _validate_tile_contract(
+        width=width,
+        height=height,
+        tile_cols=tile_cols,
+        tile_rows=tile_rows,
+        pixel_threshold=pixel_threshold,
+        sparse_threshold=sparse_threshold,
+        dense_threshold=dense_threshold,
+    )
 
     diff = np.abs(curr.astype(np.int16) - prev.astype(np.int16)) > int(pixel_threshold)
     tile_counts: list[int] = [0 for _ in range(tile_cols * tile_rows)]

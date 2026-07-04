@@ -1,35 +1,20 @@
 #include "node1_non_llm/gpu_lab.hpp"
+#include "node1_non_llm/gpu_lab_json.hpp"
 
 #include <algorithm>
 #include <cstdint>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <map>
-#include <random>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 using namespace node1_non_llm;
 
 namespace {
-
-std::string json_escape(const std::string& s) {
-    std::ostringstream os;
-    for (char c : s) {
-        switch (c) {
-            case '"': os << "\\\""; break;
-            case '\\': os << "\\\\"; break;
-            case '\n': os << "\\n"; break;
-            case '\r': os << "\\r"; break;
-            case '\t': os << "\\t"; break;
-            default: os << c; break;
-        }
-    }
-    return os.str();
-}
-
-std::string bool_json(bool v) { return v ? "true" : "false"; }
 
 std::map<std::string, std::string> parse_args(int argc, char** argv) {
     std::map<std::string, std::string> args;
@@ -114,14 +99,19 @@ void make_synthetic_frames(
         paint(width / 2, height / 2, width / 2 + width / 16, height / 2 + height / 16, 200U);
     } else if (scenario == "dense") {
         paint(0, 0, width, height, 210U);
-    } else {
+    } else if (scenario == "mixed") {
         // Cover four middle columns across all four tile rows: 16 active
         // tiles with the default 8x4 grid, so the route is mixed.
         paint(width / 4, 0, (width * 3) / 4, height, 200U);
+    } else {
+        throw std::runtime_error("unknown synthetic scenario: " + scenario);
     }
 }
 
 std::vector<float> make_synthetic_audio(int sample_count) {
+    if (sample_count < 0) {
+        throw std::runtime_error("audio-samples must be non-negative");
+    }
     std::vector<float> samples(static_cast<std::size_t>(sample_count), 0.0f);
     for (int i = 0; i < sample_count; ++i) {
         if (i > sample_count / 3 && i < sample_count / 3 + sample_count / 12) {
@@ -132,73 +122,6 @@ std::vector<float> make_synthetic_audio(int sample_count) {
         }
     }
     return samples;
-}
-
-std::string tile_counts_json(const std::vector<std::uint32_t>& counts) {
-    std::ostringstream os;
-    os << "[";
-    for (std::size_t i = 0; i < counts.size(); ++i) {
-        if (i) os << ",";
-        os << counts[i];
-    }
-    os << "]";
-    return os.str();
-}
-
-std::string rms_json(const std::vector<float>& values) {
-    std::ostringstream os;
-    os << "[";
-    for (std::size_t i = 0; i < values.size(); ++i) {
-        if (i) os << ",";
-        os << values[i];
-    }
-    os << "]";
-    return os.str();
-}
-
-std::string frame_analysis_json(const FrameAnalysis& a) {
-    std::ostringstream os;
-    os << "{";
-    os << "\"ok\":" << bool_json(a.ok) << ",";
-    os << "\"backend\":\"" << json_escape(a.backend) << "\",";
-    os << "\"error\":\"" << json_escape(a.error) << "\",";
-    os << "\"width\":" << a.width << ",";
-    os << "\"height\":" << a.height << ",";
-    os << "\"tile_cols\":" << a.tile_cols << ",";
-    os << "\"tile_rows\":" << a.tile_rows << ",";
-    os << "\"pixel_threshold\":" << a.pixel_threshold << ",";
-    os << "\"sparse_threshold\":" << a.sparse_threshold << ",";
-    os << "\"dense_threshold\":" << a.dense_threshold << ",";
-    os << "\"tile_mask\":" << a.tile_mask << ",";
-    os << "\"tile_mask_hex\":\"" << hex32(a.tile_mask) << "\",";
-    os << "\"low_half_mask_hex\":\"" << hex32(a.low_half_mask) << "\",";
-    os << "\"high_half_mask_hex\":\"" << hex32(a.high_half_mask) << "\",";
-    os << "\"active_tiles\":" << a.active_tiles << ",";
-    os << "\"low_half_active_tiles\":" << a.low_half_active_tiles << ",";
-    os << "\"high_half_active_tiles\":" << a.high_half_active_tiles << ",";
-    os << "\"changed_pixels\":" << a.changed_pixels << ",";
-    os << "\"changed_ratio\":" << a.changed_ratio << ",";
-    os << "\"path\":\"" << workload_path_name(a.path) << "\",";
-    os << "\"tile_changed_pixels\":" << tile_counts_json(a.tile_changed_pixels);
-    os << "}";
-    return os.str();
-}
-
-std::string audio_analysis_json(const AudioEnergyAnalysis& a) {
-    std::ostringstream os;
-    os << "{";
-    os << "\"ok\":" << bool_json(a.ok) << ",";
-    os << "\"backend\":\"" << json_escape(a.backend) << "\",";
-    os << "\"error\":\"" << json_escape(a.error) << "\",";
-    os << "\"samples\":" << a.samples << ",";
-    os << "\"window_samples\":" << a.window_samples << ",";
-    os << "\"threshold\":" << a.threshold << ",";
-    os << "\"event_mask\":" << a.event_mask << ",";
-    os << "\"event_mask_hex\":\"" << hex32(a.event_mask) << "\",";
-    os << "\"active_windows\":" << a.active_windows << ",";
-    os << "\"rms\":" << rms_json(a.rms);
-    os << "}";
-    return os.str();
 }
 
 void print_usage() {
@@ -250,6 +173,8 @@ int main(int argc, char** argv) {
             }
             cpu_frame = analyze_gray_frames_cpu(prev.data(), curr.data(), tile_cfg);
             ran_frame = true;
+        } else if (mode != "audio-raw-f32") {
+            throw std::runtime_error("unknown mode: " + mode);
         }
 
 #ifdef NODE1_NON_LLM_WITH_CUDA

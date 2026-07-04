@@ -172,3 +172,73 @@ copy time versus kernel time
 4. Add full-frame coalesced dense kernels for overlay/motion transforms.
 5. Add batched AudioBox float32 window analysis and optional CUDA STFT later.
 6. Add Prometheus counters for path distribution and CUDA timing.
+
+## Phase 0: v0.1 hardening for future CPU/GPU modules
+
+Phase 0 is intentionally a refactor and test-hardening step. It does not add new
+ISP, ROI, dense-frame, mixed-region, overlay, audio-sync, storage, or visual
+fingerprint kernels yet. It prepares the native lab for those phases by making
+core contracts reusable.
+
+### Phase 0 changes
+
+```text
+refactor shared structs      -> gpu_lab_types.hpp / gpu_lab_types.cpp
+split JSON helper            -> gpu_lab_json.hpp / gpu_lab_json.cpp
+split CUDA error helper      -> gpu_lab_cuda_utils.cuh / gpu_lab_cuda_utils.cu
+add timing struct            -> gpu_lab_timing.hpp / gpu_lab_timing.cpp
+add stricter tests           -> gpu_lab_selftest.cpp and pytest bridge checks
+```
+
+### Why this matters
+
+The next modules from the overview context all need the same foundation:
+
+```text
+Scenario 1 sparse camera activity       -> ROI route/crop/resize/normalize
+Scenario 2 dense camera activity        -> coalesced full-frame transforms/reductions
+Scenario 3 mixed camera activity        -> connected tile groups/grouped ROI batches
+Scenario 4 overlay-heavy processing     -> alpha blend/heatmap/thumbnail paths
+Scenario 5 AudioBox soundtrack          -> RMS/onset/silence/sync-drift paths
+ISP Filters implementation              -> rolling CPU line buffer and CUDA tiled 3x3 filters
+```
+
+Each of those phases needs shared route structs, validation rules, JSON output,
+CUDA error handling, and timing facts. Phase 0 provides those shared pieces first.
+
+### Evidence safety contract
+
+The module remains facts-only. Phase 0 does not introduce any semantic labels. It
+still emits workload routing metadata only:
+
+```text
+sparse
+mixed
+dense
+unavailable
+```
+
+It must not emit identity, intent, behavior, person, vehicle, weapon, or other
+semantic claims.
+
+### Validation commands
+
+```bash
+cd native/node1_non_llm_gpu_inference_lab
+./scripts/run_node1_gpu_lab_phase0_selftest.sh
+./scripts/build_node1_gpu_lab.sh
+./build/node1_non_llm_gpu_lab --mode synthetic --scenario sparse --gpu
+./build/node1_non_llm_gpu_lab --mode synthetic --scenario mixed --gpu
+./build/node1_non_llm_gpu_lab --mode synthetic --scenario dense --gpu
+```
+
+Then from repo root:
+
+```bash
+python -m compileall -q monitor_me tests
+python -m pytest -q tests -k "gpu or capture or cli or model"
+python -m monitor_me.cli gpu-lab-health --enabled --probe
+python -m monitor_me.cli gpu-lab-synthetic --scenario sparse
+python -m monitor_me.cli gpu-lab-synthetic --scenario mixed
+python -m monitor_me.cli gpu-lab-synthetic --scenario dense
+```

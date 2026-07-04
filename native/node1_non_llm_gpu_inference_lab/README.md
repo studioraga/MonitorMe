@@ -96,3 +96,57 @@ audio.active_windows
 ```
 
 MonitorMe stores these as child `gpu_workload_profiled` evidence rows when `--gpu-lab-enabled` is passed to `capture-run`.
+
+## Phase 0 hardening layout
+
+Phase 0 keeps the v0.1 feature contract unchanged while splitting the native lab
+into reusable pieces for the next ISP, sparse ROI, dense frame, mixed region,
+overlay, audio, storage, and latency phases.
+
+New reusable pieces:
+
+```text
+include/node1_non_llm/gpu_lab_types.hpp       shared structs, route helpers, validation
+include/node1_non_llm/gpu_lab_timing.hpp      host timing structs/helpers
+include/node1_non_llm/gpu_lab_json.hpp        JSON serialization helpers
+include/node1_non_llm/gpu_lab_cuda_utils.cuh  CUDA error/event timing helpers
+src/gpu_lab_types.cpp                         shared helper implementation
+src/gpu_lab_timing.cpp                        timing implementation
+src/gpu_lab_json.cpp                          JSON implementation
+src/gpu_lab_cuda_utils.cu                     CUDA helper implementation
+src/gpu_lab_selftest.cpp                      stricter native CPU self-test
+```
+
+The existing CLI still supports:
+
+```bash
+./build/node1_non_llm_gpu_lab --mode synthetic --scenario sparse --gpu
+./build/node1_non_llm_gpu_lab --mode synthetic --scenario mixed --gpu
+./build/node1_non_llm_gpu_lab --mode synthetic --scenario dense --gpu
+./build/node1_non_llm_gpu_lab --mode analyze-raw-gray --prev prev.gray --curr curr.gray --width 1280 --height 720 --gpu
+./build/node1_non_llm_gpu_lab --mode audio-raw-f32 --audio samples.f32 --gpu
+```
+
+Every frame/audio result now includes a `timing` object:
+
+```json
+{"h2d_ms":0.0,"kernel_ms":0.0,"d2h_ms":0.0,"total_ms":0.0}
+```
+
+CPU paths populate `kernel_ms` and `total_ms`. CUDA paths populate H2D,
+kernel, D2H, and total timing when CUDA is requested.
+
+Run the Phase 0 CPU self-test:
+
+```bash
+./scripts/run_node1_gpu_lab_phase0_selftest.sh
+```
+
+For CUDA validation on Node1:
+
+```bash
+./scripts/build_node1_gpu_lab.sh
+compute-sanitizer --tool memcheck ./build/node1_non_llm_gpu_lab --mode synthetic --scenario sparse --gpu
+compute-sanitizer --tool memcheck ./build/node1_non_llm_gpu_lab --mode synthetic --scenario mixed --gpu
+compute-sanitizer --tool memcheck ./build/node1_non_llm_gpu_lab --mode synthetic --scenario dense --gpu
+```
