@@ -99,10 +99,30 @@ void make_synthetic_frames(
         paint(width / 2, height / 2, width / 2 + width / 16, height / 2 + height / 16, 200U);
     } else if (scenario == "dense") {
         paint(0, 0, width, height, 210U);
-    } else if (scenario == "mixed") {
+    } else if (scenario == "mixed" || scenario == "contiguous") {
         // Cover four middle columns across all four tile rows: 16 active
-        // tiles with the default 8x4 grid, so the route is mixed.
+        // tiles with the default 8x4 grid, so the route is mixed and the
+        // Phase 4 component grouping is one contiguous component.
         paint(width / 4, 0, (width * 3) / 4, height, 200U);
+    } else if (scenario == "scattered") {
+        // Paint a checkerboard of active default 8x4 tiles. Diagonal touches
+        // do not count as connected for the Phase 4 4-neighbor component walk,
+        // so this creates many scattered components while still using the
+        // mixed route by active tile count.
+        const int tile_cols = 8;
+        const int tile_rows = 4;
+        for (int ty = 0; ty < tile_rows; ++ty) {
+            for (int tx = 0; tx < tile_cols; ++tx) {
+                if (((tx + ty) & 1) != 0) {
+                    continue;
+                }
+                const int x0 = (tx * width) / tile_cols;
+                const int x1 = ((tx + 1) * width) / tile_cols;
+                const int y0 = (ty * height) / tile_rows;
+                const int y1 = ((ty + 1) * height) / tile_rows;
+                paint(x0, y0, x1, y1, 200U);
+            }
+        }
     } else {
         throw std::runtime_error("unknown synthetic scenario: " + scenario);
     }
@@ -125,15 +145,16 @@ std::vector<float> make_synthetic_audio(int sample_count) {
 }
 
 void print_usage() {
-    std::cerr << "node1_non_llm_gpu_lab --mode synthetic|analyze-raw-gray|audio-raw-f32|isp-synthetic|isp-pgm|sparse-roi-synthetic [options]\n"
-              << "  --scenario sparse|mixed|dense       synthetic frame pattern\n"
+    std::cerr << "node1_non_llm_gpu_lab --mode synthetic|analyze-raw-gray|audio-raw-f32|isp-synthetic|isp-pgm|sparse-roi-synthetic|mixed-region-synthetic [options]\n"
+              << "  --scenario sparse|mixed|dense|contiguous|scattered synthetic frame pattern\n"
               << "  --prev previous.gray --curr current.gray --width W --height H\n"
               << "  --audio samples.f32 --audio-samples N --audio-window-samples N\n"
               << "  --isp-filter blur|sharpen|edge|sobel-x|sobel-y|sobel-mag\n"
               << "  --input frame.pgm|frame.ppm --output filtered.pgm|filtered.ppm\n"
-              << "  --target-width N --target-height N    sparse ROI resize target dimensions\n"
+              << "  --target-width N --target-height N    ROI/mixed-region resize target dimensions\n"
               << "  --max-rois N                       sparse ROI maximum active tile crops\n"
-              << "  --include-output                   include ISP/ROI output values in JSON, useful for tiny tests\n"
+              << "  --max-groups N                     mixed-region maximum connected components\n"
+              << "  --include-output                   include ISP/ROI/mixed-region output values in JSON, useful for tiny tests\n"
               << "  --gpu                              also run CUDA backend when compiled with CUDA\n";
 }
 
@@ -180,6 +201,10 @@ int main(int argc, char** argv) {
             ran_frame = true;
         } else if (mode == "sparse-roi-synthetic") {
             make_synthetic_frames(width, height, arg_string(args, "scenario", "sparse"), prev, curr);
+            cpu_frame = analyze_gray_frames_cpu(prev.data(), curr.data(), tile_cfg);
+            ran_frame = true;
+        } else if (mode == "mixed-region-synthetic") {
+            make_synthetic_frames(width, height, arg_string(args, "scenario", "contiguous"), prev, curr);
             cpu_frame = analyze_gray_frames_cpu(prev.data(), curr.data(), tile_cfg);
             ran_frame = true;
         } else if (mode != "audio-raw-f32" && mode != "isp-synthetic" && mode != "isp-pgm") {
@@ -294,9 +319,35 @@ int main(int argc, char** argv) {
 #endif
         }
 
+        MixedRegionAnalysis cpu_mixed_region;
+        MixedRegionAnalysis gpu_mixed_region;
+        bool ran_mixed_region = false;
+        bool ran_mixed_region_cuda = false;
+        if (mode == "mixed-region-synthetic") {
+            MixedRegionConfig mixed_cfg;
+            mixed_cfg.width = width;
+            mixed_cfg.height = height;
+            mixed_cfg.tile_cols = tile_cfg.tile_cols;
+            mixed_cfg.tile_rows = tile_cfg.tile_rows;
+            mixed_cfg.tile_mask = cpu_frame.tile_mask;
+            mixed_cfg.target_width = arg_int(args, "target-width", 32);
+            mixed_cfg.target_height = arg_int(args, "target-height", 32);
+            mixed_cfg.max_groups = arg_int(args, "max-groups", 32);
+            mixed_cfg.collect_output = true;
+            cpu_mixed_region = analyze_mixed_region_cpu(curr.data(), mixed_cfg);
+            ran_mixed_region = true;
+#ifdef NODE1_NON_LLM_WITH_CUDA
+            if (has_flag(args, "gpu")) {
+                gpu_mixed_region = analyze_mixed_region_cuda(curr.data(), mixed_cfg);
+                ran_mixed_region_cuda = true;
+            }
+#endif
+        }
+
 #ifndef NODE1_NON_LLM_WITH_CUDA
         (void)ran_isp_cuda;
         (void)ran_sparse_roi_cuda;
+        (void)ran_mixed_region_cuda;
 #endif
         std::ostringstream os;
         os << "{";
@@ -339,7 +390,17 @@ int main(int argc, char** argv) {
         os << ",\"sparse_roi_cuda\":null";
         os << ",\"sparse_roi_cpu_cuda_comparison\":null";
 #endif
+        const bool include_mixed_region_output = has_flag(args, "include-output");
+        os << ",\"mixed_region\":" << (ran_mixed_region ? mixed_region_analysis_json(cpu_mixed_region, include_mixed_region_output) : "null");
+#ifdef NODE1_NON_LLM_WITH_CUDA
+        os << ",\"mixed_region_cuda\":" << (ran_mixed_region_cuda ? mixed_region_analysis_json(gpu_mixed_region, include_mixed_region_output) : "null");
+        os << ",\"mixed_region_cpu_cuda_comparison\":" << (ran_mixed_region_cuda ? mixed_region_cpu_cuda_comparison_json(cpu_mixed_region, gpu_mixed_region) : "null");
+#else
+        os << ",\"mixed_region_cuda\":null";
+        os << ",\"mixed_region_cpu_cuda_comparison\":null";
+#endif
         if (ran_isp) {
+
             os << ",\"isp_input\":\"" << json_escape(isp_input_path) << "\"";
             os << ",\"isp_output\":\"" << json_escape(isp_output_path) << "\"";
         }

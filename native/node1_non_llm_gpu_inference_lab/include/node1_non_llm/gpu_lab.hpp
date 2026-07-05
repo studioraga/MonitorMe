@@ -3,6 +3,7 @@
 #include "node1_non_llm/gpu_lab_types.hpp"
 #include "node1_non_llm/isp_filters.hpp"
 #include "node1_non_llm/sparse_roi.hpp"
+#include "node1_non_llm/mixed_region.hpp"
 
 namespace node1_non_llm {
 
@@ -38,6 +39,10 @@ IspFilterAnalysis apply_isp_filter_cuda_tiled(
 SparseRoiAnalysis analyze_sparse_roi_cuda(
     const std::uint8_t* gray,
     const SparseRoiConfig& cfg);
+
+MixedRegionAnalysis analyze_mixed_region_cuda(
+    const std::uint8_t* gray,
+    const MixedRegionConfig& cfg);
 #endif
 
 } // namespace node1_non_llm

@@ -516,3 +516,27 @@ native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase3_sparse_r
 ```
 
 The CUDA selftest validates sparse, mixed, and dense synthetic masks to ensure active tile walking, ROI rectangle generation, normalized output, and CPU-vs-CUDA parity remain deterministic across route shapes.
+
+## Phase 4 — Mixed region path
+
+Phase 4 implements the mixed-region processing path after tile-mask routing.
+The module converts active tiles into 4-neighbor connected components, classifies
+the tile layout as `contiguous` or `scattered`, and performs grouped crop
+batching by resizing and normalizing each connected-component bounding box.
+
+Outputs:
+
+- `mixed_region`: CPU reference connected components and grouped normalized crops.
+- `mixed_region_cuda`: CUDA grouped crop/resize/normalize path when `--gpu` is used.
+- `mixed_region_cpu_cuda_comparison`: CPU-vs-CUDA parity facts, including
+  `groups_equal`, `output_close`, `mismatch_count`, `max_abs_diff`, and
+  `metrics_close`.
+
+Supported synthetic scenarios for Phase 4 validation:
+
+- `contiguous`: one rectangular component on the mixed route.
+- `scattered`: checkerboard active tiles, many separated components on the mixed route.
+- `dense`: all tiles active, one large contiguous component.
+
+The module is intentionally non-semantic. It emits only workload, grouping,
+crop-batching, and normalization facts.

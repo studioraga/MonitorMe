@@ -3,6 +3,7 @@
 #include "node1_non_llm/gpu_lab_types.hpp"
 #include "node1_non_llm/isp_filters.hpp"
 #include "node1_non_llm/sparse_roi.hpp"
+#include "node1_non_llm/mixed_region.hpp"
 
 #include <cstdint>
 #include <string>
@@ -21,5 +22,7 @@ std::string isp_filter_analysis_json(const IspFilterAnalysis& analysis, bool inc
 std::string isp_cpu_cuda_comparison_json(const IspFilterAnalysis& cpu, const IspFilterAnalysis& cuda);
 std::string sparse_roi_analysis_json(const SparseRoiAnalysis& analysis, bool include_output = false);
 std::string sparse_roi_cpu_cuda_comparison_json(const SparseRoiAnalysis& cpu, const SparseRoiAnalysis& cuda);
+std::string mixed_region_analysis_json(const MixedRegionAnalysis& analysis, bool include_output = false);
+std::string mixed_region_cpu_cuda_comparison_json(const MixedRegionAnalysis& cpu, const MixedRegionAnalysis& cuda);
 
 } // namespace node1_non_llm

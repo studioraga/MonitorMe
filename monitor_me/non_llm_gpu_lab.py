@@ -275,6 +275,48 @@ class Node1NonLLMGpuLabRunner:
         result["binary_path"] = str(binary)
         return result
 
+
+    def run_mixed_region_synthetic(
+        self,
+        *,
+        scenario: str = "contiguous",
+        width: int = 320,
+        height: int = 240,
+        target_width: int = 16,
+        target_height: int = 16,
+        max_groups: int = 32,
+    ) -> dict[str, Any]:
+        binary = self.binary_path
+        if not binary.exists():
+            return {
+                "ok": False,
+                "schema": GPU_LAB_SCHEMA,
+                "error": f"native binary not found: {binary}",
+                "binary_path": str(binary),
+            }
+        cmd = [
+            str(binary),
+            "--mode", "mixed-region-synthetic",
+            "--scenario", scenario,
+            "--width", str(width),
+            "--height", str(height),
+            "--tile-cols", str(self.config.tile_cols),
+            "--tile-rows", str(self.config.tile_rows),
+            "--pixel-threshold", str(self.config.pixel_threshold),
+            "--sparse-threshold", str(self.config.sparse_threshold),
+            "--dense-threshold", str(self.config.dense_threshold),
+            "--target-width", str(target_width),
+            "--target-height", str(target_height),
+            "--max-groups", str(max_groups),
+        ]
+        if self.config.prefer_cuda:
+            cmd.append("--gpu")
+        result = self._run_json(cmd)
+        result["schema"] = GPU_LAB_SCHEMA
+        result["source"] = "native_binary"
+        result["binary_path"] = str(binary)
+        return result
+
     def run_isp_synthetic(self, *, filter_name: str = "sobel-mag", width: int = 64, height: int = 48) -> dict[str, Any]:
         binary = self.binary_path
         if not binary.exists():

@@ -298,3 +298,41 @@ Validation:
 ./scripts/run_node1_gpu_lab_phase3_sparse_roi_cuda_selftest.sh
 compute-sanitizer --tool memcheck ./build/node1_non_llm_gpu_lab --mode sparse-roi-synthetic --scenario sparse --gpu --include-output
 ```
+
+## Phase 4: Mixed region connected-component grouping
+
+Phase 4 adds the mixed-region path for the non-LLM GPU lab. It takes the
+existing frame tile mask, walks active tiles with 4-neighbor connected-component
+logic, classifies the result as `contiguous` or `scattered`, and batches one
+crop/resize/normalize operation per connected component.
+
+Native CPU validation:
+
+```bash
+./scripts/run_node1_gpu_lab_phase4_mixed_region_selftest.sh
+```
+
+Native CUDA validation after `./scripts/build_node1_gpu_lab.sh`:
+
+```bash
+./scripts/run_node1_gpu_lab_phase4_mixed_region_cuda_selftest.sh
+```
+
+Manual example:
+
+```bash
+./build/node1_non_llm_gpu_lab \
+  --mode mixed-region-synthetic \
+  --scenario scattered \
+  --width 320 \
+  --height 240 \
+  --target-width 16 \
+  --target-height 16 \
+  --gpu \
+  --include-output
+```
+
+The JSON emits `mixed_region` for the CPU reference path, `mixed_region_cuda`
+for the CUDA path, and `mixed_region_cpu_cuda_comparison` for parity facts. The
+module remains facts-only workload metadata; it does not claim object identity,
+behavior, intent, weapons, or suspicious activity.

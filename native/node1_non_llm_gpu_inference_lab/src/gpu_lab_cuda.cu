@@ -857,4 +857,248 @@ SparseRoiAnalysis analyze_sparse_roi_cuda(
     return out;
 }
 
+
+namespace {
+
+struct DeviceMixedRegionGroup {
+    int component_index;
+    unsigned int tile_mask;
+    int tile_count;
+    int min_tile_col;
+    int min_tile_row;
+    int max_tile_col;
+    int max_tile_row;
+    int x;
+    int y;
+    int width;
+    int height;
+    int classification_code;
+};
+
+__global__ void mixed_region_batch_resize_normalize_kernel(
+    const std::uint8_t* input,
+    int image_width,
+    const DeviceMixedRegionGroup* groups,
+    int group_count,
+    int target_width,
+    int target_height,
+    float* output) {
+
+    const int target_pixels = target_width * target_height;
+    const int total = group_count * target_pixels;
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= total) {
+        return;
+    }
+    const int group_idx = idx / target_pixels;
+    const int local = idx - group_idx * target_pixels;
+    const int oy = local / target_width;
+    const int ox = local - oy * target_width;
+    const DeviceMixedRegionGroup group = groups[group_idx];
+    const int rel_x = min((ox * group.width) / target_width, group.width - 1);
+    const int rel_y = min((oy * group.height) / target_height, group.height - 1);
+    const int sx = group.x + rel_x;
+    const int sy = group.y + rel_y;
+    output[idx] = static_cast<float>(input[sy * image_width + sx]) / 255.0f;
+}
+
+__global__ void mixed_region_stats_kernel(
+    const float* values,
+    int total,
+    float* min_value,
+    float* max_value,
+    double* sum_value) {
+
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= total) {
+        return;
+    }
+    const float v = values[idx];
+    atomicAdd(sum_value, static_cast<double>(v));
+    atomicMin(reinterpret_cast<int*>(min_value), __float_as_int(v));
+    atomicMax(reinterpret_cast<int*>(max_value), __float_as_int(v));
+}
+
+} // namespace
+
+MixedRegionAnalysis analyze_mixed_region_cuda(
+    const std::uint8_t* gray,
+    const MixedRegionConfig& cfg) {
+
+    HostStageTimer total_timer;
+    MixedRegionAnalysis out;
+    out.backend = "cuda";
+    out.width = cfg.width;
+    out.height = cfg.height;
+    out.tile_cols = cfg.tile_cols;
+    out.tile_rows = cfg.tile_rows;
+    out.tile_mask = cfg.tile_mask;
+    out.active_tiles = popcount32(cfg.tile_mask);
+    out.target_width = cfg.target_width;
+    out.target_height = cfg.target_height;
+
+    std::string error;
+    if (!gray) {
+        out.error = "gray input pointer is null";
+        out.timing.total_ms = total_timer.elapsed_ms();
+        return out;
+    }
+    if (!validate_mixed_region_config(cfg, error)) {
+        out.error = error;
+        out.timing.total_ms = total_timer.elapsed_ms();
+        return out;
+    }
+
+    out.groups = connected_tile_components(cfg);
+    out.component_count = static_cast<int>(out.groups.size());
+    out.group_count = out.component_count;
+    out.classification = out.group_count == 0 ? "empty" : (out.group_count == 1 ? out.groups[0].classification : "scattered");
+    for (const auto& group : out.groups) {
+        if (group.classification == "contiguous") {
+            ++out.contiguous_components;
+        } else {
+            ++out.scattered_components;
+        }
+        out.source_pixels_covered += static_cast<std::uint64_t>(group.width) * static_cast<std::uint64_t>(group.height);
+    }
+
+    const int target_pixels = cfg.target_width * cfg.target_height;
+    const int total_output = out.group_count * target_pixels;
+    out.output_elements = static_cast<std::uint64_t>(total_output);
+    out.bytes_read = out.output_elements;
+    out.bytes_written = out.output_elements * sizeof(float);
+
+    const std::size_t image_bytes = static_cast<std::size_t>(cfg.width) * static_cast<std::size_t>(cfg.height);
+    const std::size_t group_bytes = std::max<std::size_t>(1U, out.groups.size() * sizeof(DeviceMixedRegionGroup));
+    const std::size_t output_bytes = std::max<std::size_t>(1U, static_cast<std::size_t>(total_output) * sizeof(float));
+
+    std::uint8_t* d_input = nullptr;
+    DeviceMixedRegionGroup* d_groups = nullptr;
+    float* d_output = nullptr;
+    float* d_min = nullptr;
+    float* d_max = nullptr;
+    double* d_sum = nullptr;
+
+    auto cleanup = [&]() noexcept {
+        cudaFree(d_input);
+        cudaFree(d_groups);
+        cudaFree(d_output);
+        cudaFree(d_min);
+        cudaFree(d_max);
+        cudaFree(d_sum);
+    };
+
+    cudaError_t err = cudaMalloc(&d_input, image_bytes);
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMalloc mixed region input"); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    err = cudaMalloc(&d_groups, group_bytes);
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMalloc mixed region groups"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    err = cudaMalloc(&d_output, output_bytes);
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMalloc mixed region output"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    err = cudaMalloc(&d_min, sizeof(float));
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMalloc mixed region min"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    err = cudaMalloc(&d_max, sizeof(float));
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMalloc mixed region max"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    err = cudaMalloc(&d_sum, sizeof(double));
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMalloc mixed region sum"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+
+    std::vector<DeviceMixedRegionGroup> h_groups;
+    h_groups.reserve(out.groups.size());
+    for (const auto& group : out.groups) {
+        h_groups.push_back(DeviceMixedRegionGroup{
+            group.component_index,
+            group.tile_mask,
+            group.tile_count,
+            group.min_tile_col,
+            group.min_tile_row,
+            group.max_tile_col,
+            group.max_tile_row,
+            group.x,
+            group.y,
+            group.width,
+            group.height,
+            group.classification == "contiguous" ? 1 : 2});
+    }
+
+    {
+        HostStageTimer h2d_timer;
+        err = cudaMemcpy(d_input, gray, image_bytes, cudaMemcpyHostToDevice);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy mixed region input"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        if (!h_groups.empty()) {
+            err = cudaMemcpy(d_groups, h_groups.data(), h_groups.size() * sizeof(DeviceMixedRegionGroup), cudaMemcpyHostToDevice);
+            if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy mixed region groups"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        }
+        err = cudaMemset(d_output, 0, output_bytes);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemset mixed region output"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        const float init_min = 1.0e30f;
+        const float init_max = -1.0e30f;
+        const double init_sum = 0.0;
+        err = cudaMemcpy(d_min, &init_min, sizeof(float), cudaMemcpyHostToDevice);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy mixed region min init"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemcpy(d_max, &init_max, sizeof(float), cudaMemcpyHostToDevice);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy mixed region max init"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemcpy(d_sum, &init_sum, sizeof(double), cudaMemcpyHostToDevice);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy mixed region sum init"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        out.timing.h2d_ms = h2d_timer.elapsed_ms();
+    }
+
+    if (total_output > 0) {
+        CudaEventTimer kernel_timer;
+        if (kernel_timer.ok()) {
+            err = kernel_timer.start();
+            if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaEventRecord mixed region start"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        }
+        const int threads = 256;
+        const int blocks = (total_output + threads - 1) / threads;
+        mixed_region_batch_resize_normalize_kernel<<<blocks, threads>>>(
+            d_input, cfg.width, d_groups, out.group_count, cfg.target_width, cfg.target_height, d_output);
+        err = cudaGetLastError();
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "mixed_region_batch_resize_normalize_kernel launch"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        mixed_region_stats_kernel<<<blocks, threads>>>(d_output, total_output, d_min, d_max, d_sum);
+        err = cudaGetLastError();
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "mixed_region_stats_kernel launch"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        if (kernel_timer.ok()) {
+            err = kernel_timer.stop(out.timing.kernel_ms);
+            if (err != cudaSuccess) { out.error = cuda_error_message(err, "mixed region CUDA event sync"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        } else {
+            HostStageTimer sync_timer;
+            err = cudaDeviceSynchronize();
+            out.timing.kernel_ms = sync_timer.elapsed_ms();
+            if (err != cudaSuccess) { out.error = cuda_error_message(err, "mixed region CUDA sync"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        }
+    }
+
+    if (cfg.collect_output) {
+        out.normalized.assign(static_cast<std::size_t>(total_output), 0.0f);
+    }
+    float h_min = 0.0f;
+    float h_max = 0.0f;
+    double h_sum = 0.0;
+    {
+        HostStageTimer d2h_timer;
+        if (cfg.collect_output && total_output > 0) {
+            err = cudaMemcpy(out.normalized.data(), d_output, static_cast<std::size_t>(total_output) * sizeof(float), cudaMemcpyDeviceToHost);
+            if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy mixed region output"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        }
+        if (total_output > 0) {
+            err = cudaMemcpy(&h_min, d_min, sizeof(float), cudaMemcpyDeviceToHost);
+            if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy mixed region min"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+            err = cudaMemcpy(&h_max, d_max, sizeof(float), cudaMemcpyDeviceToHost);
+            if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy mixed region max"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+            err = cudaMemcpy(&h_sum, d_sum, sizeof(double), cudaMemcpyDeviceToHost);
+            if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy mixed region sum"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        }
+        out.timing.d2h_ms = d2h_timer.elapsed_ms();
+    }
+
+    out.ok = true;
+    if (total_output > 0) {
+        out.output_min = h_min;
+        out.output_max = h_max;
+        out.output_mean = h_sum / static_cast<double>(total_output);
+    }
+    out.timing.total_ms = total_timer.elapsed_ms();
+    cleanup();
+    return out;
+}
+
 } // namespace node1_non_llm

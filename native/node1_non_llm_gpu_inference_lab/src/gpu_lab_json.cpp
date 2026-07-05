@@ -321,4 +321,145 @@ std::string sparse_roi_cpu_cuda_comparison_json(const SparseRoiAnalysis& cpu, co
     return os.str();
 }
 
+
+std::string int_vector_json(const std::vector<int>& values) {
+    std::ostringstream os;
+    os << "[";
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        if (i) os << ",";
+        os << values[i];
+    }
+    os << "]";
+    return os.str();
+}
+
+std::string mixed_region_group_json(const MixedRegionGroup& g) {
+    std::ostringstream os;
+    os << "{";
+    os << "\"component_index\":" << g.component_index << ",";
+    os << "\"tile_mask\":" << g.tile_mask << ",";
+    os << "\"tile_mask_hex\":\"" << hex32(g.tile_mask) << "\",";
+    os << "\"tile_count\":" << g.tile_count << ",";
+    os << "\"classification\":\"" << json_escape(g.classification) << "\",";
+    os << "\"min_tile_col\":" << g.min_tile_col << ",";
+    os << "\"min_tile_row\":" << g.min_tile_row << ",";
+    os << "\"max_tile_col\":" << g.max_tile_col << ",";
+    os << "\"max_tile_row\":" << g.max_tile_row << ",";
+    os << "\"x\":" << g.x << ",";
+    os << "\"y\":" << g.y << ",";
+    os << "\"width\":" << g.width << ",";
+    os << "\"height\":" << g.height << ",";
+    os << "\"tile_indices\":" << int_vector_json(g.tile_indices);
+    os << "}";
+    return os.str();
+}
+
+std::string mixed_region_groups_json(const std::vector<MixedRegionGroup>& groups) {
+    std::ostringstream os;
+    os << "[";
+    for (std::size_t i = 0; i < groups.size(); ++i) {
+        if (i) os << ",";
+        os << mixed_region_group_json(groups[i]);
+    }
+    os << "]";
+    return os.str();
+}
+
+std::string mixed_region_analysis_json(const MixedRegionAnalysis& a, bool include_output) {
+    std::ostringstream os;
+    os << "{";
+    os << "\"ok\":" << bool_json(a.ok) << ",";
+    os << "\"backend\":\"" << json_escape(a.backend) << "\",";
+    os << "\"schema\":\"" << json_escape(a.schema) << "\",";
+    os << "\"error\":\"" << json_escape(a.error) << "\",";
+    os << "\"width\":" << a.width << ",";
+    os << "\"height\":" << a.height << ",";
+    os << "\"tile_cols\":" << a.tile_cols << ",";
+    os << "\"tile_rows\":" << a.tile_rows << ",";
+    os << "\"tile_mask\":" << a.tile_mask << ",";
+    os << "\"tile_mask_hex\":\"" << hex32(a.tile_mask) << "\",";
+    os << "\"active_tiles\":" << a.active_tiles << ",";
+    os << "\"component_count\":" << a.component_count << ",";
+    os << "\"contiguous_components\":" << a.contiguous_components << ",";
+    os << "\"scattered_components\":" << a.scattered_components << ",";
+    os << "\"classification\":\"" << json_escape(a.classification) << "\",";
+    os << "\"group_count\":" << a.group_count << ",";
+    os << "\"target_width\":" << a.target_width << ",";
+    os << "\"target_height\":" << a.target_height << ",";
+    os << "\"source_pixels_covered\":" << a.source_pixels_covered << ",";
+    os << "\"output_elements\":" << a.output_elements << ",";
+    os << "\"bytes_read\":" << a.bytes_read << ",";
+    os << "\"bytes_written\":" << a.bytes_written << ",";
+    os << "\"output_min\":" << a.output_min << ",";
+    os << "\"output_max\":" << a.output_max << ",";
+    os << "\"output_mean\":" << a.output_mean << ",";
+    os << "\"groups\":" << mixed_region_groups_json(a.groups) << ",";
+    os << "\"facts_only\":true,";
+    os << "\"note\":\"Mixed region connected-component grouping and crop batching workload metrics only; no object, identity, behavior, or intent claim is emitted.\",";
+    os << "\"timing\":" << stage_timing_json(a.timing);
+    if (include_output) {
+        os << ",\"normalized\":" << float_sample_vector_json(a.normalized);
+    }
+    os << "}";
+    return os.str();
+}
+
+std::string mixed_region_cpu_cuda_comparison_json(const MixedRegionAnalysis& cpu, const MixedRegionAnalysis& cuda) {
+    bool groups_equal = cpu.groups.size() == cuda.groups.size();
+    if (groups_equal) {
+        for (std::size_t i = 0; i < cpu.groups.size(); ++i) {
+            const auto& a = cpu.groups[i];
+            const auto& b = cuda.groups[i];
+            if (a.component_index != b.component_index || a.tile_mask != b.tile_mask || a.tile_count != b.tile_count ||
+                a.classification != b.classification || a.x != b.x || a.y != b.y || a.width != b.width ||
+                a.height != b.height || a.tile_indices != b.tile_indices) {
+                groups_equal = false;
+                break;
+            }
+        }
+    }
+
+    bool output_close = false;
+    double max_abs_diff = 0.0;
+    std::size_t mismatch_count = 0;
+    if (cpu.ok && cuda.ok && cpu.normalized.size() == cuda.normalized.size()) {
+        output_close = true;
+        for (std::size_t i = 0; i < cpu.normalized.size(); ++i) {
+            const double diff = std::abs(static_cast<double>(cpu.normalized[i]) - static_cast<double>(cuda.normalized[i]));
+            max_abs_diff = std::max(max_abs_diff, diff);
+            if (diff > 1e-7) {
+                output_close = false;
+                ++mismatch_count;
+            }
+        }
+    }
+    const double output_mean_abs_diff = std::abs(cpu.output_mean - cuda.output_mean);
+    const bool metrics_close = output_mean_abs_diff <= 1e-9
+        && std::abs(static_cast<double>(cpu.output_min) - static_cast<double>(cuda.output_min)) <= 1e-7
+        && std::abs(static_cast<double>(cpu.output_max) - static_cast<double>(cuda.output_max)) <= 1e-7
+        && cpu.component_count == cuda.component_count
+        && cpu.group_count == cuda.group_count
+        && cpu.contiguous_components == cuda.contiguous_components
+        && cpu.scattered_components == cuda.scattered_components
+        && cpu.classification == cuda.classification;
+
+    std::ostringstream os;
+    os << "{";
+    os << "\"ok\":" << bool_json(cpu.ok && cuda.ok && groups_equal && output_close && metrics_close) << ",";
+    os << "\"schema\":\"node1_non_llm_mixed_region_cpu_cuda_compare.v0.1\",";
+    os << "\"tile_mask_hex\":\"" << hex32(cpu.tile_mask) << "\",";
+    os << "\"classification\":\"" << json_escape(cpu.classification) << "\",";
+    os << "\"component_count\":" << cpu.component_count << ",";
+    os << "\"group_count\":" << cpu.group_count << ",";
+    os << "\"groups_equal\":" << bool_json(groups_equal) << ",";
+    os << "\"output_close\":" << bool_json(output_close) << ",";
+    os << "\"mismatch_count\":" << mismatch_count << ",";
+    os << "\"max_abs_diff\":" << max_abs_diff << ",";
+    os << "\"metrics_close\":" << bool_json(metrics_close) << ",";
+    os << "\"output_mean_abs_diff\":" << output_mean_abs_diff << ",";
+    os << "\"facts_only\":true";
+    os << "}";
+    return os.str();
+}
+
 } // namespace node1_non_llm

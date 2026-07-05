@@ -861,3 +861,16 @@ MONITORME_GPU_LAB_PREFER_CUDA=1 \
 ```
 
 The sparse ROI result is facts-only workload metadata and does not emit object, person, identity, behavior, intent, weapon, or suspiciousness claims.
+
+### Node1 non-LLM GPU lab Phase 4
+
+Phase 4 adds the mixed-region path: connected tile components, contiguous vs
+scattered classification, and grouped crop/resize/normalize batching with CPU
+and CUDA parity checks. The MonitorMe CLI command is:
+
+```bash
+python -m monitor_me.cli gpu-lab-mixed-region-synthetic --scenario scattered
+```
+
+Use `MONITORME_GPU_LAB_PREFER_CUDA=1` with a CUDA-built native binary to emit
+`mixed_region_cuda` and `mixed_region_cpu_cuda_comparison`.

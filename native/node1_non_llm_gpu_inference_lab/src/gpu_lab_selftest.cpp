@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 #include "node1_non_llm/isp_filters.hpp"
+#include "node1_non_llm/mixed_region.hpp"
 
 using namespace node1_non_llm;
 
@@ -184,6 +185,65 @@ void test_sparse_roi_cpu() {
     require(!validate_sparse_roi_config(cfg, error), "invalid sparse ROI >32 tile config accepted");
 }
 
+
+void test_mixed_region_cpu() {
+    const int width = 64;
+    const int height = 32;
+    std::vector<std::uint8_t> image(static_cast<std::size_t>(width * height), 0U);
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            image[static_cast<std::size_t>(y * width + x)] = static_cast<std::uint8_t>((x * 3 + y * 5) & 0xFF);
+        }
+    }
+
+    MixedRegionConfig cfg;
+    cfg.width = width;
+    cfg.height = height;
+    cfg.tile_cols = 4;
+    cfg.tile_rows = 2;
+    cfg.tile_mask = 0x0000000FU; // row 0 full, one rectangular connected component
+    cfg.target_width = 4;
+    cfg.target_height = 4;
+    cfg.max_groups = 8;
+    cfg.collect_output = true;
+
+    std::string error;
+    require(validate_mixed_region_config(cfg, error), "valid mixed region config rejected");
+    const auto contiguous_groups = connected_tile_components(cfg);
+    require(contiguous_groups.size() == 1, "contiguous mixed group count mismatch");
+    require(contiguous_groups[0].tile_count == 4, "contiguous mixed tile count mismatch");
+    require(contiguous_groups[0].classification == "contiguous", "contiguous mixed classification mismatch");
+    require(contiguous_groups[0].tile_indices.size() == 4, "contiguous tile_indices size mismatch");
+
+    auto contiguous = analyze_mixed_region_cpu(image.data(), cfg);
+    require(contiguous.ok, "contiguous mixed region analysis failed: " + contiguous.error);
+    require(contiguous.component_count == 1, "contiguous component_count mismatch");
+    require(contiguous.group_count == 1, "contiguous group_count mismatch");
+    require(contiguous.classification == "contiguous", "overall contiguous classification mismatch");
+    require(contiguous.output_elements == 16, "contiguous output element count mismatch");
+    require(contiguous.normalized.size() == 16, "contiguous normalized output size mismatch");
+    require(contiguous.bytes_written == contiguous.output_elements * sizeof(float), "mixed region bytes_written mismatch");
+
+    cfg.tile_mask = 0x00000025U; // disconnected tiles 0, 2, and 5
+    const auto scattered_groups = connected_tile_components(cfg);
+    require(scattered_groups.size() == 3, "scattered group count mismatch");
+    auto scattered = analyze_mixed_region_cpu(image.data(), cfg);
+    require(scattered.ok, "scattered mixed region analysis failed: " + scattered.error);
+    require(scattered.component_count == 3, "scattered component_count mismatch");
+    require(scattered.group_count == 3, "scattered group_count mismatch");
+    require(scattered.classification == "scattered", "overall scattered classification mismatch");
+    require(scattered.output_elements == 48, "scattered output element count mismatch");
+
+    const std::string json = mixed_region_analysis_json(scattered, false);
+    require(json.find("\"schema\":\"node1_non_llm_mixed_region.v0.1\"") != std::string::npos, "mixed region JSON missing schema");
+    require(json.find("\"facts_only\":true") != std::string::npos, "mixed region JSON missing facts_only");
+    require(json.find("\"groups\":") != std::string::npos, "mixed region JSON missing groups");
+
+    cfg.tile_cols = 9;
+    cfg.tile_rows = 4;
+    require(!validate_mixed_region_config(cfg, error), "invalid mixed region >32 tile config accepted");
+}
+
 void test_isp_filter_reference_equivalence() {
     const int width = 9;
     const int height = 7;
@@ -290,6 +350,7 @@ int main() {
         test_cpu_audio();
         test_json_helpers();
         test_sparse_roi_cpu();
+        test_mixed_region_cpu();
         test_isp_filter_reference_equivalence();
         test_isp_known_values();
         test_pgm_ppm_io();
