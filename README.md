@@ -804,3 +804,42 @@ MONITORME_GPU_LAB_BIN=native/node1_non_llm_gpu_inference_lab/build-cpu/node1_non
 
 The ISP path emits only image-processing workload metrics and no object,
 identity, behavior, or intent claims.
+
+### Node1 non-LLM GPU lab Phase 2: CUDA ISP filters and metrics
+
+Phase 2 adds a CUDA ISP path that validates against the Phase 1 CPU rolling
+line-buffer baseline. The native binary keeps the CPU result in `isp` and, when
+compiled with CUDA and invoked with `--gpu`, emits `isp_cuda` plus an
+`isp_cpu_cuda_comparison` object.
+
+Implemented CUDA ISP work:
+
+- shared-memory tiled 3x3 filters with halo loading
+- CUDA Sobel X, Sobel Y, and Sobel magnitude paths
+- CUDA blur, sharpen, and edge filters for CPU-vs-CUDA parity
+- CUDA reduction metrics for output mean/edge energy, focus score, noise score,
+  lighting delta, saturation pixels, and saturation ratio
+- facts-only CPU/CUDA comparison metadata
+
+Example:
+
+```bash
+cd native/node1_non_llm_gpu_inference_lab
+./scripts/build_node1_gpu_lab.sh
+./build/node1_non_llm_gpu_lab --mode isp-synthetic --isp-filter sobel-mag --width 64 --height 48 --gpu --include-output
+./scripts/run_node1_gpu_lab_phase2_isp_cuda_selftest.sh
+```
+
+MonitorMe CLI wrapper with CUDA binary:
+
+```bash
+MONITORME_GPU_LAB_BIN=native/node1_non_llm_gpu_inference_lab/build/node1_non_llm_gpu_lab \
+MONITORME_GPU_LAB_PREFER_CUDA=1 \
+  python -m monitor_me.cli gpu-lab-isp-synthetic --filter sobel-mag --width 64 --height 48
+```
+
+Validation should confirm `isp_cpu_cuda_comparison.ok=true`,
+`output_equal=true`, `metrics_close=true`, `mismatch_count=0`, and
+`max_abs_diff=0` for all Phase 1 filters. The ISP CUDA path remains workload
+metadata only and does not emit object, person, identity, behavior, intent,
+weapon, or suspiciousness claims.

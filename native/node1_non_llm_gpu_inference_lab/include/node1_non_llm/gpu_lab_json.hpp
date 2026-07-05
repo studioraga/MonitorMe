@@ -17,5 +17,6 @@ std::string float_vector_json(const std::vector<float>& values);
 std::string frame_analysis_json(const FrameAnalysis& analysis);
 std::string audio_analysis_json(const AudioEnergyAnalysis& analysis);
 std::string isp_filter_analysis_json(const IspFilterAnalysis& analysis, bool include_output = false);
+std::string isp_cpu_cuda_comparison_json(const IspFilterAnalysis& cpu, const IspFilterAnalysis& cuda);
 
 } // namespace node1_non_llm

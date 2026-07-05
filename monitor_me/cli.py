@@ -304,7 +304,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--scenario", default="mixed", choices=["sparse", "mixed", "dense"])
     p.set_defaults(func=cmd_gpu_lab_synthetic)
 
-    p = sub.add_parser("gpu-lab-isp-synthetic", help="Run CPU ISP rolling line-buffer synthetic filter validation")
+    p = sub.add_parser("gpu-lab-isp-synthetic", help="Run ISP synthetic filter validation; CUDA comparison is used when available")
     p.add_argument("--filter", default="sobel-mag", choices=["blur", "sharpen", "edge", "sobel-x", "sobel-y", "sobel-mag"])
     p.add_argument("--width", type=int, default=64)
     p.add_argument("--height", type=int, default=48)

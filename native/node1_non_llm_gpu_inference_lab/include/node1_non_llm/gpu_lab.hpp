@@ -25,6 +25,14 @@ AudioEnergyAnalysis analyze_audio_energy_cuda(
     const float* samples,
     int sample_count,
     const AudioEnergyConfig& cfg);
+
+IspFilterAnalysis analyze_isp_filter_cuda(
+    const std::uint8_t* gray,
+    const IspFilterConfig& cfg);
+
+IspFilterAnalysis apply_isp_filter_cuda_tiled(
+    const std::uint8_t* gray,
+    const IspFilterConfig& cfg);
 #endif
 
 } // namespace node1_non_llm

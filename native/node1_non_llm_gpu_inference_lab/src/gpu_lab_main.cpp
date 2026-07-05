@@ -211,7 +211,9 @@ int main(int argc, char** argv) {
 
 
         IspFilterAnalysis cpu_isp;
+        IspFilterAnalysis gpu_isp;
         bool ran_isp = false;
+        bool ran_isp_cuda = false;
         std::string isp_input_path;
         std::string isp_output_path;
         if (mode == "isp-synthetic" || mode == "isp-pgm") {
@@ -239,6 +241,12 @@ int main(int argc, char** argv) {
             isp_cfg.collect_output = true;
             cpu_isp = apply_isp_filter_cpu_rolling(gray_image.data.data(), isp_cfg);
             ran_isp = true;
+#ifdef NODE1_NON_LLM_WITH_CUDA
+            if (has_flag(args, "gpu")) {
+                gpu_isp = analyze_isp_filter_cuda(gray_image.data.data(), isp_cfg);
+                ran_isp_cuda = true;
+            }
+#endif
 
             isp_output_path = arg_string(args, "output", "");
             if (!isp_output_path.empty()) {
@@ -255,6 +263,9 @@ int main(int argc, char** argv) {
             }
         }
 
+#ifndef NODE1_NON_LLM_WITH_CUDA
+        (void)ran_isp_cuda;
+#endif
         std::ostringstream os;
         os << "{";
         os << "\"ok\":true,";
@@ -278,7 +289,15 @@ int main(int argc, char** argv) {
 #else
         os << ",\"audio_cuda\":null";
 #endif
-        os << ",\"isp\":" << (ran_isp ? isp_filter_analysis_json(cpu_isp, has_flag(args, "include-output")) : "null");
+        const bool include_isp_output = has_flag(args, "include-output");
+        os << ",\"isp\":" << (ran_isp ? isp_filter_analysis_json(cpu_isp, include_isp_output) : "null");
+#ifdef NODE1_NON_LLM_WITH_CUDA
+        os << ",\"isp_cuda\":" << (ran_isp_cuda ? isp_filter_analysis_json(gpu_isp, include_isp_output) : "null");
+        os << ",\"isp_cpu_cuda_comparison\":" << (ran_isp_cuda ? isp_cpu_cuda_comparison_json(cpu_isp, gpu_isp) : "null");
+#else
+        os << ",\"isp_cuda\":null";
+        os << ",\"isp_cpu_cuda_comparison\":null";
+#endif
         if (ran_isp) {
             os << ",\"isp_input\":\"" << json_escape(isp_input_path) << "\"";
             os << ",\"isp_output\":\"" << json_escape(isp_output_path) << "\"";

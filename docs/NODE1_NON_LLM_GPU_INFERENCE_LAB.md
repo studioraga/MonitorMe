@@ -355,6 +355,116 @@ MONITORME_GPU_LAB_BIN=native/node1_non_llm_gpu_inference_lab/build-cpu/node1_non
 
 ### Out of scope for Phase 1
 
-Phase 1 does not add CUDA ISP kernels yet. The next phase should implement
-shared-memory tiled CUDA kernels and compare CPU rolling-buffer output against
+Phase 1 intentionally did not add CUDA ISP kernels. Phase 2, documented below, adds
+shared-memory tiled CUDA kernels and compares CPU rolling-buffer output against
 CUDA output.
+
+## Phase 2 — CUDA ISP filters and metrics
+
+Phase 2 implements the CUDA counterpart to the Phase 1 CPU ISP rolling-buffer
+baseline. It does not add semantic vision, object detection, identity, intent,
+or behavior claims. It only emits deterministic image-processing workload facts.
+
+### Implemented CUDA ISP filters
+
+The CUDA path supports the same filter names as Phase 1:
+
+```text
+blur
+sharpen
+edge / conv-edge
+sobel-x
+sobel-y
+sobel-mag
+```
+
+### CUDA design
+
+The filter kernel uses a 16x16 output tile and a shared-memory tile with a
+1-pixel halo on all sides:
+
+```text
+global grayscale input
+  -> shared tile [16 + 2][16 + 2]
+  -> clamped border halo loads
+  -> 3x3 stencil per output pixel
+  -> global grayscale output
+```
+
+This is the shared-memory tiled 3x3 filter baseline requested in the TASK1 plan.
+It prepares the later Nsight Compute profiling work for shared-memory bank
+conflicts, global memory coalescing, and kernel timing.
+
+### CUDA metrics
+
+A second CUDA reduction kernel computes facts-only ISP metrics from the input and
+filtered output:
+
+```text
+edge_energy       = output mean
+focus_score       = output variance
+noise_score       = mean absolute input/output difference
+lighting_delta    = absolute input/output mean delta
+saturation_pixels = count(output == 0 or output == 255)
+saturation_ratio  = saturation_pixels / pixels_processed
+```
+
+### JSON contract
+
+CPU output remains under `isp`. CUDA output is emitted under `isp_cuda` only when
+the binary is compiled with CUDA and the native CLI receives `--gpu`.
+
+```json
+{
+  "isp": {"backend": "cpu", "schema": "node1_non_llm_isp_filters.v0.1"},
+  "isp_cuda": {"backend": "cuda", "schema": "node1_non_llm_isp_filters.v0.1"},
+  "isp_cpu_cuda_comparison": {
+    "schema": "node1_non_llm_isp_cpu_cuda_compare.v0.1",
+    "ok": true,
+    "output_equal": true,
+    "metrics_close": true,
+    "mismatch_count": 0,
+    "max_abs_diff": 0,
+    "facts_only": true
+  }
+}
+```
+
+### Validation plan
+
+```bash
+cd native/node1_non_llm_gpu_inference_lab
+./scripts/build_node1_gpu_lab.sh
+./scripts/run_node1_gpu_lab_phase2_isp_cuda_selftest.sh
+```
+
+Manual checks:
+
+```bash
+./build/node1_non_llm_gpu_lab --mode isp-synthetic --isp-filter blur --width 64 --height 48 --gpu --include-output
+./build/node1_non_llm_gpu_lab --mode isp-synthetic --isp-filter sharpen --width 64 --height 48 --gpu --include-output
+./build/node1_non_llm_gpu_lab --mode isp-synthetic --isp-filter edge --width 64 --height 48 --gpu --include-output
+./build/node1_non_llm_gpu_lab --mode isp-synthetic --isp-filter sobel-x --width 64 --height 48 --gpu --include-output
+./build/node1_non_llm_gpu_lab --mode isp-synthetic --isp-filter sobel-y --width 64 --height 48 --gpu --include-output
+./build/node1_non_llm_gpu_lab --mode isp-synthetic --isp-filter sobel-mag --width 64 --height 48 --gpu --include-output
+```
+
+Compute Sanitizer:
+
+```bash
+compute-sanitizer --tool memcheck ./build/node1_non_llm_gpu_lab --mode isp-synthetic --isp-filter sobel-mag --width 64 --height 48 --gpu --include-output
+```
+
+Python validation:
+
+```bash
+python -m pytest -q tests/test_node1_isp_filters_phase2.py
+python -m pytest -q tests -k "gpu or isp or capture or cli or model"
+```
+
+### Phase 2 out of scope
+
+Phase 2 does not add demosaic RGGB, sparse ROI crop/resize/normalize, mixed
+region grouping, dense full-frame reductions, overlay-heavy processing,
+AudioBox signal processing, storage batch planning, or visual fingerprinting.
+Those remain later phases from the TASK1 module checklist.

@@ -70,4 +70,9 @@ void write_ppm(const std::string& path, const ImageU8& image);
 IspFilterAnalysis apply_isp_filter_cpu_rolling(const std::uint8_t* gray, const IspFilterConfig& cfg);
 IspFilterAnalysis apply_isp_filter_cpu_reference(const std::uint8_t* gray, const IspFilterConfig& cfg);
 
+#ifdef NODE1_NON_LLM_WITH_CUDA
+IspFilterAnalysis analyze_isp_filter_cuda(const std::uint8_t* gray, const IspFilterConfig& cfg);
+IspFilterAnalysis apply_isp_filter_cuda_tiled(const std::uint8_t* gray, const IspFilterConfig& cfg);
+#endif
+
 } // namespace node1_non_llm

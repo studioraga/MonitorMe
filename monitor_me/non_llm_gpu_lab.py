@@ -249,6 +249,8 @@ class Node1NonLLMGpuLabRunner:
             "--width", str(width),
             "--height", str(height),
         ]
+        if self.config.prefer_cuda:
+            cmd.append("--gpu")
         result = self._run_json(cmd)
         result["schema"] = GPU_LAB_SCHEMA
         result["source"] = "native_binary"

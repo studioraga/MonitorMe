@@ -1,5 +1,7 @@
 #include "node1_non_llm/gpu_lab_json.hpp"
 
+#include <algorithm>
+#include <cmath>
 #include <sstream>
 
 namespace node1_non_llm {
@@ -148,11 +150,57 @@ std::string isp_filter_analysis_json(const IspFilterAnalysis& a, bool include_ou
     os << "\"saturation_pixels\":" << a.saturation_pixels << ",";
     os << "\"saturation_ratio\":" << a.saturation_ratio << ",";
     os << "\"facts_only\":true,";
-    os << "\"note\":\"CPU ISP filter metrics only; no object, identity, behavior, or intent claim is emitted.\",";
+    os << "\"note\":\"ISP filter metrics only; no object, identity, behavior, or intent claim is emitted.\",";
     os << "\"timing\":" << stage_timing_json(a.timing);
     if (include_output) {
         os << ",\"output\":" << uint8_vector_json(a.output);
     }
+    os << "}";
+    return os.str();
+}
+
+std::string isp_cpu_cuda_comparison_json(const IspFilterAnalysis& cpu, const IspFilterAnalysis& cuda) {
+    std::ostringstream os;
+    bool output_equal = false;
+    int max_abs_diff = 0;
+    std::size_t mismatch_count = 0;
+    if (cpu.ok && cuda.ok && cpu.output.size() == cuda.output.size()) {
+        output_equal = true;
+        for (std::size_t i = 0; i < cpu.output.size(); ++i) {
+            const int diff = std::abs(static_cast<int>(cpu.output[i]) - static_cast<int>(cuda.output[i]));
+            max_abs_diff = std::max(max_abs_diff, diff);
+            if (diff != 0) {
+                output_equal = false;
+                ++mismatch_count;
+            }
+        }
+    }
+    const double edge_energy_abs_diff = std::abs(cpu.edge_energy - cuda.edge_energy);
+    const double focus_score_abs_diff = std::abs(cpu.focus_score - cuda.focus_score);
+    const double noise_score_abs_diff = std::abs(cpu.noise_score - cuda.noise_score);
+    const double lighting_delta_abs_diff = std::abs(cpu.lighting_delta - cuda.lighting_delta);
+    const double saturation_ratio_abs_diff = std::abs(cpu.saturation_ratio - cuda.saturation_ratio);
+    const bool metrics_close = edge_energy_abs_diff <= 1e-6
+        && focus_score_abs_diff <= 1e-3
+        && noise_score_abs_diff <= 1e-6
+        && lighting_delta_abs_diff <= 1e-6
+        && saturation_ratio_abs_diff <= 1e-9
+        && cpu.saturation_pixels == cuda.saturation_pixels;
+    os << "{";
+    os << "\"ok\":" << bool_json(cpu.ok && cuda.ok && output_equal && metrics_close) << ",";
+    os << "\"schema\":\"node1_non_llm_isp_cpu_cuda_compare.v0.1\",";
+    os << "\"filter\":\"" << json_escape(cpu.filter) << "\",";
+    os << "\"output_equal\":" << bool_json(output_equal) << ",";
+    os << "\"mismatch_count\":" << mismatch_count << ",";
+    os << "\"max_abs_diff\":" << max_abs_diff << ",";
+    os << "\"metrics_close\":" << bool_json(metrics_close) << ",";
+    os << "\"edge_energy_abs_diff\":" << edge_energy_abs_diff << ",";
+    os << "\"focus_score_abs_diff\":" << focus_score_abs_diff << ",";
+    os << "\"noise_score_abs_diff\":" << noise_score_abs_diff << ",";
+    os << "\"lighting_delta_abs_diff\":" << lighting_delta_abs_diff << ",";
+    os << "\"saturation_ratio_abs_diff\":" << saturation_ratio_abs_diff << ",";
+    os << "\"saturation_pixels_equal\":" << bool_json(cpu.saturation_pixels == cuda.saturation_pixels) << ",";
+    os << "\"facts_only\":true";
     os << "}";
     return os.str();
 }

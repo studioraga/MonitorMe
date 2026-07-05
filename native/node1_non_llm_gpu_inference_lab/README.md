@@ -176,7 +176,7 @@ for each output row:
   load only the new y+2 row into line2
 ```
 
-This is the Phase 1 foundation for the later Phase 2 CUDA shared-memory tiled
+This is the Phase 1 foundation used by the Phase 2 CUDA shared-memory tiled
 ISP kernels.
 
 ### Synthetic ISP smoke
@@ -235,3 +235,35 @@ cmake --build build-cpu -j"$(nproc)"
 The self-test validates rolling-buffer output against a naive 3x3 reference for
 all filters, known-value kernels, PGM/PPM roundtrip I/O, and ISP JSON safety
 fields.
+
+## Phase 2: CUDA ISP shared-memory tiled filters
+
+Phase 2 adds CUDA versions of the Phase 1 ISP filters. The CUDA path uses a
+shared-memory 16x16 output tile plus a 1-pixel halo for 3x3 stencil access. The
+same native command emits the CPU baseline in `isp` and the CUDA result in
+`isp_cuda` when built with CUDA and invoked with `--gpu`.
+
+```bash
+./scripts/build_node1_gpu_lab.sh
+./build/node1_non_llm_gpu_lab --mode isp-synthetic --isp-filter sobel-mag --width 64 --height 48 --gpu --include-output
+```
+
+Run the Phase 2 CUDA parity self-test:
+
+```bash
+./scripts/run_node1_gpu_lab_phase2_isp_cuda_selftest.sh
+```
+
+The self-test requires all filters to satisfy:
+
+```text
+isp_cpu_cuda_comparison.ok == true
+output_equal == true
+metrics_close == true
+mismatch_count == 0
+max_abs_diff == 0
+```
+
+The CUDA ISP path also emits edge/focus/noise/lighting/saturation metrics using
+CUDA reduction counters. It remains facts-only workload metadata and does not
+emit object, identity, behavior, or intent claims.
