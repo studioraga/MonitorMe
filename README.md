@@ -843,3 +843,21 @@ Validation should confirm `isp_cpu_cuda_comparison.ok=true`,
 `max_abs_diff=0` for all Phase 1 filters. The ISP CUDA path remains workload
 metadata only and does not emit object, person, identity, behavior, intent,
 weapon, or suspiciousness claims.
+
+
+### Node1 non-LLM GPU lab Phase 3 sparse ROI
+
+Phase 3 adds a native sparse ROI crop/resize/normalize path. It walks active motion tiles, creates ROI rectangles, resizes each ROI to a fixed target, normalizes to float32, and compares CPU/CUDA output when a CUDA binary is used.
+
+```bash
+MONITORME_GPU_LAB_BIN=native/node1_non_llm_gpu_inference_lab/build/node1_non_llm_gpu_lab \
+MONITORME_GPU_LAB_PREFER_CUDA=1 \
+  python -m monitor_me.cli gpu-lab-sparse-roi-synthetic \
+  --scenario sparse \
+  --width 320 \
+  --height 240 \
+  --target-width 16 \
+  --target-height 16
+```
+
+The sparse ROI result is facts-only workload metadata and does not emit object, person, identity, behavior, intent, weapon, or suspiciousness claims.

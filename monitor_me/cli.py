@@ -78,6 +78,20 @@ def cmd_gpu_lab_synthetic(args: argparse.Namespace) -> int:
     return 0 if result.get("ok") else 3
 
 
+def cmd_gpu_lab_sparse_roi_synthetic(args: argparse.Namespace) -> int:
+    config = GpuLabConfig.from_env(enabled=True)
+    runner = Node1NonLLMGpuLabRunner(config)
+    result = runner.run_sparse_roi_synthetic(
+        scenario=args.scenario,
+        width=args.width,
+        height=args.height,
+        target_width=args.target_width,
+        target_height=args.target_height,
+        max_rois=args.max_rois,
+    )
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0 if result.get("ok") else 3
+
 def cmd_gpu_lab_isp_synthetic(args: argparse.Namespace) -> int:
     config = GpuLabConfig.from_env(enabled=True)
     runner = Node1NonLLMGpuLabRunner(config)
@@ -303,6 +317,16 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("gpu-lab-synthetic", help="Run native C++/CUDA sparse/mixed/dense synthetic profiler")
     p.add_argument("--scenario", default="mixed", choices=["sparse", "mixed", "dense"])
     p.set_defaults(func=cmd_gpu_lab_synthetic)
+
+
+    p = sub.add_parser("gpu-lab-sparse-roi-synthetic", help="Run sparse ROI crop/resize/normalize validation; CUDA comparison is used when available")
+    p.add_argument("--scenario", default="sparse", choices=["sparse", "mixed", "dense"])
+    p.add_argument("--width", type=int, default=320)
+    p.add_argument("--height", type=int, default=240)
+    p.add_argument("--target-width", type=int, default=16)
+    p.add_argument("--target-height", type=int, default=16)
+    p.add_argument("--max-rois", type=int, default=32)
+    p.set_defaults(func=cmd_gpu_lab_sparse_roi_synthetic)
 
     p = sub.add_parser("gpu-lab-isp-synthetic", help="Run ISP synthetic filter validation; CUDA comparison is used when available")
     p.add_argument("--filter", default="sobel-mag", choices=["blur", "sharpen", "edge", "sobel-x", "sobel-y", "sobel-mag"])

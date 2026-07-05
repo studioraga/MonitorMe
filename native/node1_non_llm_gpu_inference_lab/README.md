@@ -267,3 +267,34 @@ max_abs_diff == 0
 The CUDA ISP path also emits edge/focus/noise/lighting/saturation metrics using
 CUDA reduction counters. It remains facts-only workload metadata and does not
 emit object, identity, behavior, or intent claims.
+
+## Phase 3: Sparse ROI crop/resize/normalize
+
+Phase 3 adds a facts-only sparse ROI path for active-tile workloads. The native lab walks the active bits in the frame tile mask, converts each active tile into a rectangular ROI, crops from the current grayscale frame, resizes each ROI to a fixed target size with deterministic nearest-neighbor sampling, and normalizes each output element to float32 `[0, 1]`.
+
+The CPU path emits `sparse_roi`. A CUDA-built binary invoked with `--gpu` also emits `sparse_roi_cuda` and `sparse_roi_cpu_cuda_comparison`.
+
+Example:
+
+```bash
+./build/node1_non_llm_gpu_lab \
+  --mode sparse-roi-synthetic \
+  --scenario sparse \
+  --width 320 \
+  --height 240 \
+  --target-width 16 \
+  --target-height 16 \
+  --gpu \
+  --include-output
+```
+
+Expected facts include `roi_count`, active tile rectangles, output element count, bytes read/written, normalized output range, timing, and CPU-vs-CUDA parity. The sparse ROI path does not emit object, identity, behavior, intent, weapon, or suspiciousness claims.
+
+Validation:
+
+```bash
+./scripts/run_node1_gpu_lab_phase3_sparse_roi_selftest.sh
+./scripts/build_node1_gpu_lab.sh
+./scripts/run_node1_gpu_lab_phase3_sparse_roi_cuda_selftest.sh
+compute-sanitizer --tool memcheck ./build/node1_non_llm_gpu_lab --mode sparse-roi-synthetic --scenario sparse --gpu --include-output
+```

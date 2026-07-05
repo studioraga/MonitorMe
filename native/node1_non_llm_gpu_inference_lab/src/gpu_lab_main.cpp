@@ -125,13 +125,15 @@ std::vector<float> make_synthetic_audio(int sample_count) {
 }
 
 void print_usage() {
-    std::cerr << "node1_non_llm_gpu_lab --mode synthetic|analyze-raw-gray|audio-raw-f32|isp-synthetic|isp-pgm [options]\n"
+    std::cerr << "node1_non_llm_gpu_lab --mode synthetic|analyze-raw-gray|audio-raw-f32|isp-synthetic|isp-pgm|sparse-roi-synthetic [options]\n"
               << "  --scenario sparse|mixed|dense       synthetic frame pattern\n"
               << "  --prev previous.gray --curr current.gray --width W --height H\n"
               << "  --audio samples.f32 --audio-samples N --audio-window-samples N\n"
               << "  --isp-filter blur|sharpen|edge|sobel-x|sobel-y|sobel-mag\n"
               << "  --input frame.pgm|frame.ppm --output filtered.pgm|filtered.ppm\n"
-              << "  --include-output                   include ISP output pixels in JSON, useful for tiny tests\n"
+              << "  --target-width N --target-height N    sparse ROI resize target dimensions\n"
+              << "  --max-rois N                       sparse ROI maximum active tile crops\n"
+              << "  --include-output                   include ISP/ROI output values in JSON, useful for tiny tests\n"
               << "  --gpu                              also run CUDA backend when compiled with CUDA\n";
 }
 
@@ -174,6 +176,10 @@ int main(int argc, char** argv) {
             if (prev.size() != expected || curr.size() != expected) {
                 throw std::runtime_error("raw gray files must match width * height bytes");
             }
+            cpu_frame = analyze_gray_frames_cpu(prev.data(), curr.data(), tile_cfg);
+            ran_frame = true;
+        } else if (mode == "sparse-roi-synthetic") {
+            make_synthetic_frames(width, height, arg_string(args, "scenario", "sparse"), prev, curr);
             cpu_frame = analyze_gray_frames_cpu(prev.data(), curr.data(), tile_cfg);
             ran_frame = true;
         } else if (mode != "audio-raw-f32" && mode != "isp-synthetic" && mode != "isp-pgm") {
@@ -263,8 +269,34 @@ int main(int argc, char** argv) {
             }
         }
 
+        SparseRoiAnalysis cpu_sparse_roi;
+        SparseRoiAnalysis gpu_sparse_roi;
+        bool ran_sparse_roi = false;
+        bool ran_sparse_roi_cuda = false;
+        if (mode == "sparse-roi-synthetic") {
+            SparseRoiConfig roi_cfg;
+            roi_cfg.width = width;
+            roi_cfg.height = height;
+            roi_cfg.tile_cols = tile_cfg.tile_cols;
+            roi_cfg.tile_rows = tile_cfg.tile_rows;
+            roi_cfg.tile_mask = cpu_frame.tile_mask;
+            roi_cfg.target_width = arg_int(args, "target-width", 16);
+            roi_cfg.target_height = arg_int(args, "target-height", 16);
+            roi_cfg.max_rois = arg_int(args, "max-rois", 32);
+            roi_cfg.collect_output = true;
+            cpu_sparse_roi = analyze_sparse_roi_cpu(curr.data(), roi_cfg);
+            ran_sparse_roi = true;
+#ifdef NODE1_NON_LLM_WITH_CUDA
+            if (has_flag(args, "gpu")) {
+                gpu_sparse_roi = analyze_sparse_roi_cuda(curr.data(), roi_cfg);
+                ran_sparse_roi_cuda = true;
+            }
+#endif
+        }
+
 #ifndef NODE1_NON_LLM_WITH_CUDA
         (void)ran_isp_cuda;
+        (void)ran_sparse_roi_cuda;
 #endif
         std::ostringstream os;
         os << "{";
@@ -297,6 +329,15 @@ int main(int argc, char** argv) {
 #else
         os << ",\"isp_cuda\":null";
         os << ",\"isp_cpu_cuda_comparison\":null";
+#endif
+        const bool include_sparse_roi_output = has_flag(args, "include-output");
+        os << ",\"sparse_roi\":" << (ran_sparse_roi ? sparse_roi_analysis_json(cpu_sparse_roi, include_sparse_roi_output) : "null");
+#ifdef NODE1_NON_LLM_WITH_CUDA
+        os << ",\"sparse_roi_cuda\":" << (ran_sparse_roi_cuda ? sparse_roi_analysis_json(gpu_sparse_roi, include_sparse_roi_output) : "null");
+        os << ",\"sparse_roi_cpu_cuda_comparison\":" << (ran_sparse_roi_cuda ? sparse_roi_cpu_cuda_comparison_json(cpu_sparse_roi, gpu_sparse_roi) : "null");
+#else
+        os << ",\"sparse_roi_cuda\":null";
+        os << ",\"sparse_roi_cpu_cuda_comparison\":null";
 #endif
         if (ran_isp) {
             os << ",\"isp_input\":\"" << json_escape(isp_input_path) << "\"";

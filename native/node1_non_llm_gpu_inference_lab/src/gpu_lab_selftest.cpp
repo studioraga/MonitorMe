@@ -139,6 +139,51 @@ void test_json_helpers() {
     require(audio_json.find("\"timing\":") != std::string::npos, "audio JSON missing timing");
 }
 
+
+void test_sparse_roi_cpu() {
+    const int width = 32;
+    const int height = 16;
+    std::vector<std::uint8_t> image(static_cast<std::size_t>(width * height), 0U);
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            image[static_cast<std::size_t>(y * width + x)] = static_cast<std::uint8_t>((x + y) & 0xFF);
+        }
+    }
+    SparseRoiConfig cfg;
+    cfg.width = width;
+    cfg.height = height;
+    cfg.tile_cols = 4;
+    cfg.tile_rows = 2;
+    cfg.tile_mask = 0x00000021U; // tile 0 and tile 5
+    cfg.target_width = 4;
+    cfg.target_height = 4;
+    cfg.max_rois = 8;
+    cfg.collect_output = true;
+
+    std::string error;
+    require(validate_sparse_roi_config(cfg, error), "valid sparse ROI config rejected");
+    const auto rois = active_tile_rois(cfg);
+    require(rois.size() == 2, "sparse ROI active tile count mismatch");
+    require(rois[0].tile_index == 0 && rois[0].x == 0 && rois[0].y == 0, "first sparse ROI rect mismatch");
+    require(rois[1].tile_index == 5 && rois[1].x == 8 && rois[1].y == 8, "second sparse ROI rect mismatch");
+
+    const auto analysis = analyze_sparse_roi_cpu(image.data(), cfg);
+    require(analysis.ok, "sparse ROI CPU analysis failed: " + analysis.error);
+    require(analysis.roi_count == 2, "sparse ROI analysis roi_count mismatch");
+    require(analysis.output_elements == 32, "sparse ROI output element count mismatch");
+    require(analysis.normalized.size() == 32, "sparse ROI normalized output size mismatch");
+    require(std::abs(analysis.normalized[0] - 0.0f) < 1e-7f, "sparse ROI first normalized value mismatch");
+    require(analysis.output_max > analysis.output_min, "sparse ROI min/max not populated");
+    require(analysis.bytes_written == analysis.output_elements * sizeof(float), "sparse ROI bytes_written mismatch");
+    const std::string json = sparse_roi_analysis_json(analysis, false);
+    require(json.find("\"schema\":\"node1_non_llm_sparse_roi.v0.1\"") != std::string::npos, "sparse ROI JSON missing schema");
+    require(json.find("\"facts_only\":true") != std::string::npos, "sparse ROI JSON missing facts_only");
+
+    cfg.tile_cols = 9;
+    cfg.tile_rows = 4;
+    require(!validate_sparse_roi_config(cfg, error), "invalid sparse ROI >32 tile config accepted");
+}
+
 void test_isp_filter_reference_equivalence() {
     const int width = 9;
     const int height = 7;
@@ -244,6 +289,7 @@ int main() {
         test_cpu_frame_routes();
         test_cpu_audio();
         test_json_helpers();
+        test_sparse_roi_cpu();
         test_isp_filter_reference_equivalence();
         test_isp_known_values();
         test_pgm_ppm_io();

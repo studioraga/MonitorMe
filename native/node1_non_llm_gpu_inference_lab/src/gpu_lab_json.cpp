@@ -205,4 +205,120 @@ std::string isp_cpu_cuda_comparison_json(const IspFilterAnalysis& cpu, const Isp
     return os.str();
 }
 
+std::string sparse_roi_rect_json(const SparseRoiRect& r) {
+    std::ostringstream os;
+    os << "{";
+    os << "\"tile_index\":" << r.tile_index << ",";
+    os << "\"x\":" << r.x << ",";
+    os << "\"y\":" << r.y << ",";
+    os << "\"width\":" << r.width << ",";
+    os << "\"height\":" << r.height;
+    os << "}";
+    return os.str();
+}
+
+std::string sparse_roi_rects_json(const std::vector<SparseRoiRect>& rois) {
+    std::ostringstream os;
+    os << "[";
+    for (std::size_t i = 0; i < rois.size(); ++i) {
+        if (i) os << ",";
+        os << sparse_roi_rect_json(rois[i]);
+    }
+    os << "]";
+    return os.str();
+}
+
+std::string float_sample_vector_json(const std::vector<float>& values) {
+    std::ostringstream os;
+    os << "[";
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        if (i) os << ",";
+        os << values[i];
+    }
+    os << "]";
+    return os.str();
+}
+
+std::string sparse_roi_analysis_json(const SparseRoiAnalysis& a, bool include_output) {
+    std::ostringstream os;
+    os << "{";
+    os << "\"ok\":" << bool_json(a.ok) << ",";
+    os << "\"backend\":\"" << json_escape(a.backend) << "\",";
+    os << "\"schema\":\"" << json_escape(a.schema) << "\",";
+    os << "\"error\":\"" << json_escape(a.error) << "\",";
+    os << "\"width\":" << a.width << ",";
+    os << "\"height\":" << a.height << ",";
+    os << "\"tile_cols\":" << a.tile_cols << ",";
+    os << "\"tile_rows\":" << a.tile_rows << ",";
+    os << "\"tile_mask\":" << a.tile_mask << ",";
+    os << "\"tile_mask_hex\":\"" << hex32(a.tile_mask) << "\",";
+    os << "\"active_tiles\":" << a.active_tiles << ",";
+    os << "\"roi_count\":" << a.roi_count << ",";
+    os << "\"target_width\":" << a.target_width << ",";
+    os << "\"target_height\":" << a.target_height << ",";
+    os << "\"source_pixels_covered\":" << a.source_pixels_covered << ",";
+    os << "\"output_elements\":" << a.output_elements << ",";
+    os << "\"bytes_read\":" << a.bytes_read << ",";
+    os << "\"bytes_written\":" << a.bytes_written << ",";
+    os << "\"output_min\":" << a.output_min << ",";
+    os << "\"output_max\":" << a.output_max << ",";
+    os << "\"output_mean\":" << a.output_mean << ",";
+    os << "\"rois\":" << sparse_roi_rects_json(a.rois) << ",";
+    os << "\"facts_only\":true,";
+    os << "\"note\":\"Sparse ROI crop/resize/normalize workload metrics only; no object, identity, behavior, or intent claim is emitted.\",";
+    os << "\"timing\":" << stage_timing_json(a.timing);
+    if (include_output) {
+        os << ",\"normalized\":" << float_sample_vector_json(a.normalized);
+    }
+    os << "}";
+    return os.str();
+}
+
+std::string sparse_roi_cpu_cuda_comparison_json(const SparseRoiAnalysis& cpu, const SparseRoiAnalysis& cuda) {
+    bool rois_equal = cpu.rois.size() == cuda.rois.size();
+    if (rois_equal) {
+        for (std::size_t i = 0; i < cpu.rois.size(); ++i) {
+            const auto& a = cpu.rois[i];
+            const auto& b = cuda.rois[i];
+            if (a.tile_index != b.tile_index || a.x != b.x || a.y != b.y || a.width != b.width || a.height != b.height) {
+                rois_equal = false;
+                break;
+            }
+        }
+    }
+    bool output_close = false;
+    double max_abs_diff = 0.0;
+    std::size_t mismatch_count = 0;
+    if (cpu.ok && cuda.ok && cpu.normalized.size() == cuda.normalized.size()) {
+        output_close = true;
+        for (std::size_t i = 0; i < cpu.normalized.size(); ++i) {
+            const double diff = std::abs(static_cast<double>(cpu.normalized[i]) - static_cast<double>(cuda.normalized[i]));
+            max_abs_diff = std::max(max_abs_diff, diff);
+            if (diff > 1e-7) {
+                output_close = false;
+                ++mismatch_count;
+            }
+        }
+    }
+    const double output_mean_abs_diff = std::abs(cpu.output_mean - cuda.output_mean);
+    const bool metrics_close = output_mean_abs_diff <= 1e-9
+        && std::abs(static_cast<double>(cpu.output_min) - static_cast<double>(cuda.output_min)) <= 1e-7
+        && std::abs(static_cast<double>(cpu.output_max) - static_cast<double>(cuda.output_max)) <= 1e-7;
+    std::ostringstream os;
+    os << "{";
+    os << "\"ok\":" << bool_json(cpu.ok && cuda.ok && rois_equal && output_close && metrics_close) << ",";
+    os << "\"schema\":\"node1_non_llm_sparse_roi_cpu_cuda_compare.v0.1\",";
+    os << "\"tile_mask_hex\":\"" << hex32(cpu.tile_mask) << "\",";
+    os << "\"roi_count\":" << cpu.roi_count << ",";
+    os << "\"rois_equal\":" << bool_json(rois_equal) << ",";
+    os << "\"output_close\":" << bool_json(output_close) << ",";
+    os << "\"mismatch_count\":" << mismatch_count << ",";
+    os << "\"max_abs_diff\":" << max_abs_diff << ",";
+    os << "\"metrics_close\":" << bool_json(metrics_close) << ",";
+    os << "\"output_mean_abs_diff\":" << output_mean_abs_diff << ",";
+    os << "\"facts_only\":true";
+    os << "}";
+    return os.str();
+}
+
 } // namespace node1_non_llm

@@ -468,3 +468,51 @@ Phase 2 does not add demosaic RGGB, sparse ROI crop/resize/normalize, mixed
 region grouping, dense full-frame reductions, overlay-heavy processing,
 AudioBox signal processing, storage batch planning, or visual fingerprinting.
 Those remain later phases from the TASK1 module checklist.
+
+## Phase 3: Sparse ROI crop/resize/normalize
+
+Phase 3 implements the sparse ROI path from the CPU/GPU workload-optimization roadmap. It is designed for sparse camera activity where only a few motion tiles are active and full-frame GPU processing would waste memory bandwidth.
+
+Pipeline:
+
+```text
+previous/current gray frame
+  -> frame tile-mask analysis
+  -> active tile walking
+  -> ROI rectangle list
+  -> crop from current gray frame
+  -> deterministic nearest-neighbor resize
+  -> uint8-to-float32 normalize
+  -> CPU-vs-CUDA comparison facts
+```
+
+Native mode:
+
+```bash
+node1_non_llm_gpu_lab \
+  --mode sparse-roi-synthetic \
+  --scenario sparse \
+  --target-width 16 \
+  --target-height 16 \
+  --gpu \
+  --include-output
+```
+
+JSON fields:
+
+```text
+sparse_roi                         CPU reference ROI result
+sparse_roi_cuda                    CUDA ROI result when --gpu is used
+sparse_roi_cpu_cuda_comparison     rois_equal/output_close/metrics_close facts
+```
+
+The ROI path is facts-only. It reports tile-derived rectangles, crop/resize/normalize counts, normalized value statistics, bytes read/written, and timing. It does not report object class, person, identity, behavior, intent, weapon, or suspiciousness claims.
+
+Phase 3 validation scripts:
+
+```bash
+native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase3_sparse_roi_selftest.sh
+native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase3_sparse_roi_cuda_selftest.sh
+```
+
+The CUDA selftest validates sparse, mixed, and dense synthetic masks to ensure active tile walking, ROI rectangle generation, normalized output, and CPU-vs-CUDA parity remain deterministic across route shapes.
