@@ -1164,3 +1164,39 @@ no external web assets
 no identity / intent / speech-content claims
 no destructive retention action from the dashboard
 ```
+
+### Phase 16 — Scheduled evidence index retention automation
+
+Phase 16 adds local scheduled retention automation on top of the Phase 14 retention/compaction policy and Phase 15 operator dashboard. The scheduler is disabled by default and defaults to dry-run when enabled.
+
+Key commands:
+
+```bash
+python -m monitor_me.cli evidence-retention-schedule-show
+python -m monitor_me.cli evidence-retention-schedule-set \
+  --enable \
+  --cadence daily \
+  --older-than-days 30 \
+  --keep-last-per-camera 1 \
+  --keep-last-per-session 1 \
+  --dry-run
+python -m monitor_me.cli evidence-retention-schedule-run --force
+python -m monitor_me.cli evidence-retention-scheduler-runs --limit 20
+```
+
+Destructive scheduled apply requires explicit confirmation at configuration or run time:
+
+```bash
+python -m monitor_me.cli evidence-retention-schedule-set --enable --apply --yes --older-than-days 30
+python -m monitor_me.cli evidence-retention-schedule-run --force --apply --yes
+```
+
+The scheduled runner uses the same facts-only Phase 14 retention scope. It deletes only normalized evidence index rows selected by policy and does not delete source events, capture sessions, artifact rows, keyframe JPEG files, capture manifests, evidence CSV manifests, or evidence profile JSON artifacts. The local operator dashboard shows schedule status and scheduler run history but does not execute destructive actions.
+
+A one-shot wrapper is provided for timer integration:
+
+```bash
+scripts/run_evidence_retention_scheduler_once.sh
+```
+
+Example systemd templates are provided under `scripts/systemd/` for a local hourly timer.

@@ -635,3 +635,20 @@ Selftest:
 ```bash
 ./scripts/run_node1_gpu_lab_phase15_operator_dashboard_selftest.sh
 ```
+
+### Phase 16 scheduled retention automation
+
+The Phase 16 scheduler automates the Phase 14 evidence-index retention policy. It does not touch native CUDA kernels; validation is CPU/native smoke plus Python DB/API/CLI tests.
+
+```bash
+./scripts/run_node1_gpu_lab_phase16_scheduled_retention_selftest.sh
+```
+
+Scheduler commands live in the MonitorMe CLI:
+
+```bash
+python -m monitor_me.cli evidence-retention-schedule-show
+python -m monitor_me.cli evidence-retention-schedule-set --enable --cadence daily --older-than-days 30 --dry-run
+python -m monitor_me.cli evidence-retention-schedule-run --force
+python -m monitor_me.cli evidence-retention-scheduler-runs
+```

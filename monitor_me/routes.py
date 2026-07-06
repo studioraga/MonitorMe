@@ -115,6 +115,10 @@ def create_app(db_path: str | None = None):
                 "evidence_pipeline_retention_plan": "GET /evidence/pipeline/retention/plan",
                 "evidence_pipeline_retention_apply": "POST /evidence/pipeline/retention/apply",
                 "evidence_pipeline_retention_runs": "GET /evidence/pipeline/retention/runs",
+                "evidence_retention_schedule": "GET /evidence/pipeline/retention/schedule",
+                "evidence_retention_schedule_update": "POST /evidence/pipeline/retention/schedule",
+                "evidence_retention_schedule_run": "POST /evidence/pipeline/retention/schedule/run",
+                "evidence_retention_scheduler_runs": "GET /evidence/pipeline/retention/scheduler-runs",
                 "operator_dashboard": "GET /operator/dashboard",
                 "operator_dashboard_data": "GET /operator/dashboard/data",
                 "ask": "POST /assistant/ask",
@@ -154,6 +158,9 @@ def create_app(db_path: str | None = None):
                 "evidence_pipeline_api_external_upload": False,
                 "evidence_index_retention_rows_only": True,
                 "evidence_index_retention_deletes_media": False,
+                "evidence_index_retention_scheduler_enabled": True,
+                "evidence_index_retention_scheduler_default_dry_run": True,
+                "evidence_index_retention_scheduler_external_upload": False,
                 "operator_dashboard_enabled": True,
                 "operator_dashboard_external_assets": False,
                 "operator_dashboard_media_decode": False,
@@ -473,6 +480,98 @@ def create_app(db_path: str | None = None):
             "ok": True,
             "schema": "monitorme.api.evidence_index_retention_runs.v0.1",
             "evidence_retention_runs": items,
+            "count": len(items),
+            "privacy": {"external_upload": False, "media_decode_in_api": False, "facts_only": True},
+        }
+
+
+    @app.get("/evidence/pipeline/retention/schedule")
+    def evidence_pipeline_retention_schedule(schedule_id: str = "default") -> dict[str, Any]:
+        schedule = db.get_evidence_retention_schedule(schedule_id)
+        if not schedule:
+            raise HTTPException(status_code=404, detail=f"retention schedule not found: {schedule_id}")
+        return {"ok": True, "schema": "monitorme.api.evidence_index_retention_schedule.v0.1", "schedule": schedule}
+
+    @app.post("/evidence/pipeline/retention/schedule")
+    def evidence_pipeline_retention_schedule_update(
+        schedule_id: str = "default",
+        enabled: bool | None = None,
+        cadence: str | None = None,
+        older_than_days: int | None = None,
+        keep_last_per_camera: int | None = None,
+        keep_last_per_session: int | None = None,
+        profile_id: str | None = None,
+        session_id: str | None = None,
+        camera_id: str | None = None,
+        limit: int | None = None,
+        dry_run: bool | None = None,
+        compact: bool | None = None,
+        vacuum: bool | None = None,
+        next_run_after: str | None = None,
+        notes: str | None = None,
+        confirm: bool = False,
+    ) -> dict[str, Any]:
+        if dry_run is False and not confirm:
+            raise HTTPException(status_code=400, detail="confirm=true is required to schedule destructive retention apply")
+        try:
+            schedule = db.configure_evidence_retention_schedule(
+                schedule_id=schedule_id,
+                enabled=enabled,
+                cadence=cadence,
+                older_than_days=older_than_days,
+                keep_last_per_camera=keep_last_per_camera,
+                keep_last_per_session=keep_last_per_session,
+                profile_id=profile_id,
+                session_id=session_id,
+                camera_id=camera_id,
+                limit=limit,
+                dry_run=dry_run,
+                compact=compact,
+                vacuum=vacuum,
+                next_run_after=next_run_after,
+                notes=notes,
+                allow_destructive=confirm,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"ok": True, "schema": "monitorme.api.evidence_index_retention_schedule.v0.1", "schedule": schedule}
+
+    @app.post("/evidence/pipeline/retention/schedule/run")
+    def evidence_pipeline_retention_schedule_run(
+        schedule_id: str = "default",
+        force: bool = False,
+        dry_run: bool | None = None,
+        confirm: bool = False,
+    ) -> dict[str, Any]:
+        if dry_run is False and not confirm:
+            raise HTTPException(status_code=400, detail="confirm=true is required to run destructive scheduled retention")
+        try:
+            return db.run_evidence_retention_schedule(
+                schedule_id=schedule_id,
+                force=force,
+                dry_run_override=dry_run,
+                allow_destructive=confirm,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/evidence/pipeline/retention/scheduler-runs")
+    def evidence_pipeline_retention_scheduler_runs(
+        schedule_id: str | None = None,
+        scheduler_run_id: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        items = db.list_evidence_retention_scheduler_runs(
+            schedule_id=schedule_id,
+            scheduler_run_id=scheduler_run_id,
+            status=status,
+            limit=limit,
+        )
+        return {
+            "ok": True,
+            "schema": "monitorme.api.evidence_index_retention_scheduler_runs.v0.1",
+            "evidence_retention_scheduler_runs": items,
             "count": len(items),
             "privacy": {"external_upload": False, "media_decode_in_api": False, "facts_only": True},
         }

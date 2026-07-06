@@ -384,6 +384,93 @@ def cmd_evidence_retention_runs(args: argparse.Namespace) -> int:
     return 0
 
 
+
+def cmd_evidence_retention_schedule_show(args: argparse.Namespace) -> int:
+    db = _db(args)
+    schedule = db.get_evidence_retention_schedule(args.schedule_id)
+    print(json.dumps({"ok": schedule is not None, "schedule": schedule}, indent=2, sort_keys=True))
+    db.close()
+    return 0 if schedule else 3
+
+
+def cmd_evidence_retention_schedule_set(args: argparse.Namespace) -> int:
+    enabled = True if args.enable else False if args.disable else None
+    dry_run = False if args.apply else True if args.dry_run else None
+    if dry_run is False and not args.yes:
+        print(json.dumps({
+            "ok": False,
+            "error": "Refusing to schedule destructive retention without --yes. Scheduled retention defaults to dry-run.",
+            "schema": "monitorme.evidence_index_retention_schedule.v0.1",
+        }, indent=2, sort_keys=True))
+        return 2
+    db = _db(args)
+    try:
+        schedule = db.configure_evidence_retention_schedule(
+            schedule_id=args.schedule_id,
+            enabled=enabled,
+            cadence=args.cadence,
+            older_than_days=args.older_than_days,
+            keep_last_per_camera=args.keep_last_per_camera,
+            keep_last_per_session=args.keep_last_per_session,
+            profile_id=args.profile_id,
+            session_id=args.session_id,
+            camera_id=args.camera_id,
+            limit=args.limit,
+            dry_run=dry_run,
+            compact=None if args.no_compact is None else not args.no_compact,
+            vacuum=args.vacuum,
+            next_run_after=args.next_run_after,
+            notes=args.notes,
+            allow_destructive=args.yes,
+        )
+        print(json.dumps({"ok": True, "schedule": schedule}, indent=2, sort_keys=True))
+        return 0
+    except Exception as exc:
+        print(json.dumps({"ok": False, "error": str(exc), "schema": "monitorme.evidence_index_retention_schedule.v0.1"}, indent=2, sort_keys=True))
+        return 3
+    finally:
+        db.close()
+
+
+def cmd_evidence_retention_schedule_run(args: argparse.Namespace) -> int:
+    dry_run_override = False if args.apply else True if args.dry_run else None
+    if dry_run_override is False and not args.yes:
+        print(json.dumps({
+            "ok": False,
+            "error": "Refusing to run destructive scheduled retention without --yes. Use --dry-run or pass --apply --yes.",
+            "schema": "monitorme.evidence_index_retention_scheduler_result.v0.1",
+        }, indent=2, sort_keys=True))
+        return 2
+    db = _db(args)
+    try:
+        result = db.run_evidence_retention_schedule(
+            schedule_id=args.schedule_id,
+            force=args.force,
+            dry_run_override=dry_run_override,
+            allow_destructive=args.yes,
+        )
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return 0 if result.get("ok") else 3
+    except Exception as exc:
+        print(json.dumps({"ok": False, "error": str(exc), "schema": "monitorme.evidence_index_retention_scheduler_result.v0.1"}, indent=2, sort_keys=True))
+        return 3
+    finally:
+        db.close()
+
+
+def cmd_evidence_retention_scheduler_runs(args: argparse.Namespace) -> int:
+    db = _db(args)
+    result = db.list_evidence_retention_scheduler_runs(
+        schedule_id=args.schedule_id,
+        scheduler_run_id=args.scheduler_run_id,
+        status=args.status,
+        limit=args.limit,
+    )
+    print(json.dumps({"evidence_retention_scheduler_runs": result, "count": len(result)}, indent=2, sort_keys=True))
+    db.close()
+    return 0
+
+
 def cmd_ask(args: argparse.Namespace) -> int:
     db = _db(args)
     assistant = MonitorMeAssistant(db)
@@ -741,6 +828,50 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--status")
     p.add_argument("--limit", type=int, default=50)
     p.set_defaults(func=cmd_evidence_retention_runs)
+
+
+    p = sub.add_parser("evidence-retention-schedule-show", help="Show scheduled evidence index retention automation config")
+    p.add_argument("--schedule-id", default="default")
+    p.set_defaults(func=cmd_evidence_retention_schedule_show)
+
+    p = sub.add_parser("evidence-retention-schedule-set", help="Configure scheduled evidence index retention automation")
+    p.add_argument("--schedule-id", default="default")
+    group = p.add_mutually_exclusive_group()
+    group.add_argument("--enable", action="store_true", help="Enable scheduled retention checks")
+    group.add_argument("--disable", action="store_true", help="Disable scheduled retention checks")
+    p.add_argument("--cadence", choices=["hourly", "daily", "weekly", "monthly", "manual"])
+    p.add_argument("--older-than-days", type=int)
+    p.add_argument("--keep-last-per-camera", type=int)
+    p.add_argument("--keep-last-per-session", type=int)
+    p.add_argument("--profile-id")
+    p.add_argument("--session-id")
+    p.add_argument("--camera-id")
+    p.add_argument("--limit", type=int)
+    dry_group = p.add_mutually_exclusive_group()
+    dry_group.add_argument("--dry-run", action="store_true", help="Schedule dry-run retention only")
+    dry_group.add_argument("--apply", action="store_true", help="Schedule destructive retention apply; requires --yes")
+    p.add_argument("--yes", action="store_true", help="Required with --apply because scheduled retention is destructive")
+    p.add_argument("--no-compact", action="store_true", default=None, help="Disable WAL checkpoint compaction for scheduled runs")
+    p.add_argument("--vacuum", action="store_true", help="Run VACUUM after scheduled destructive retention")
+    p.add_argument("--next-run-after", help="ISO timestamp for first/next scheduled check")
+    p.add_argument("--notes", help="Operator notes for this schedule")
+    p.set_defaults(func=cmd_evidence_retention_schedule_set)
+
+    p = sub.add_parser("evidence-retention-schedule-run", help="Run scheduled evidence index retention once if due")
+    p.add_argument("--schedule-id", default="default")
+    p.add_argument("--force", action="store_true", help="Run even when schedule is disabled or not yet due")
+    run_group = p.add_mutually_exclusive_group()
+    run_group.add_argument("--dry-run", action="store_true", help="Override this run to dry-run")
+    run_group.add_argument("--apply", action="store_true", help="Override this run to destructive apply; requires --yes")
+    p.add_argument("--yes", action="store_true", help="Required with --apply")
+    p.set_defaults(func=cmd_evidence_retention_schedule_run)
+
+    p = sub.add_parser("evidence-retention-scheduler-runs", help="List scheduled retention automation run records")
+    p.add_argument("--schedule-id")
+    p.add_argument("--scheduler-run-id")
+    p.add_argument("--status")
+    p.add_argument("--limit", type=int, default=50)
+    p.set_defaults(func=cmd_evidence_retention_scheduler_runs)
 
     p = sub.add_parser("ask", help="Ask a DB-grounded MonitorMe question")
     p.add_argument("question")

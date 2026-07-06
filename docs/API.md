@@ -327,3 +327,33 @@ http://127.0.0.1:8088/operator/dashboard
 ```
 
 The HTML page has no external assets and reads only the local SQLite evidence index through the in-process API handler.
+
+## Phase 16 scheduled retention automation API
+
+Phase 16 exposes local-only scheduled retention automation for the persisted evidence index.
+
+Routes:
+
+```text
+GET  /evidence/pipeline/retention/schedule
+POST /evidence/pipeline/retention/schedule
+POST /evidence/pipeline/retention/schedule/run
+GET  /evidence/pipeline/retention/scheduler-runs
+```
+
+Examples:
+
+```bash
+curl -sS 'http://127.0.0.1:8088/evidence/pipeline/retention/schedule' | python3 -m json.tool
+
+curl -sS -X POST 'http://127.0.0.1:8088/evidence/pipeline/retention/schedule?enabled=true&cadence=daily&older_than_days=30&keep_last_per_camera=1&keep_last_per_session=1&dry_run=true' \
+  | python3 -m json.tool
+
+curl -sS -X POST 'http://127.0.0.1:8088/evidence/pipeline/retention/schedule/run?force=true&dry_run=true' \
+  | python3 -m json.tool
+
+curl -sS 'http://127.0.0.1:8088/evidence/pipeline/retention/scheduler-runs?limit=20' \
+  | python3 -m json.tool
+```
+
+A destructive scheduled retention configuration requires `confirm=true` when `dry_run=false`. The endpoint never decodes media, uploads frames, or emits semantic claims. It executes the same evidence-index-only retention path introduced in Phase 14.

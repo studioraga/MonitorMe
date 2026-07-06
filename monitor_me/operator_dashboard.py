@@ -83,6 +83,8 @@ def build_operator_dashboard_context(
         )
 
     retention_runs = db.list_evidence_retention_runs(limit=safe_retention_limit)
+    retention_schedule = db.get_evidence_retention_schedule("default")
+    scheduler_runs = db.list_evidence_retention_scheduler_runs(limit=safe_retention_limit)
     profile_count = len(summaries)
     fingerprint_count = sum(_summary_count(item, "fingerprint_count") for item in summaries)
     media_fingerprint_count = sum(_summary_count(item, "media_fingerprint_count") for item in summaries)
@@ -114,15 +116,20 @@ def build_operator_dashboard_context(
             "key_moment_count": key_moment_count,
             "safety_violation_count": safety_violation_count,
             "retention_run_count": len(retention_runs),
+            "scheduler_run_count": len(scheduler_runs),
+            "retention_schedule_enabled": 1 if (retention_schedule or {}).get("enabled") else 0,
         },
         "evidence_pipeline_summaries": summaries,
         "selected_profile_id": selected_profile_id,
         "selected_summary": selected_summary,
         "retention_runs": retention_runs,
+        "retention_schedule": retention_schedule,
+        "retention_scheduler_runs": scheduler_runs,
         "links": {
             "json_data": "/operator/dashboard/data",
             "api_summaries": "/evidence/pipeline/summaries",
             "api_retention_plan": "/evidence/pipeline/retention/plan",
+            "api_retention_schedule": "/evidence/pipeline/retention/schedule",
             "docs": "/docs",
             "openapi": "/openapi.json",
         },
@@ -137,6 +144,8 @@ def build_operator_dashboard_context(
             "intent": False,
             "speech_content": False,
             "destructive_actions_from_dashboard": False,
+            "scheduled_retention_visible": True,
+            "scheduled_retention_apply_from_dashboard": False,
         },
     }
 
@@ -147,6 +156,8 @@ def render_operator_dashboard_html(context: dict[str, Any]) -> str:
     summaries = context.get("evidence_pipeline_summaries") or []
     selected = context.get("selected_summary") if isinstance(context.get("selected_summary"), dict) else None
     retention_runs = context.get("retention_runs") or []
+    retention_schedule = context.get("retention_schedule") if isinstance(context.get("retention_schedule"), dict) else {}
+    scheduler_runs = context.get("retention_scheduler_runs") or []
 
     def card(label: str, value: Any, note: str = "") -> str:
         return (
@@ -231,6 +242,29 @@ def render_operator_dashboard_html(context: dict[str, Any]) -> str:
             "</tr>"
         )
     retention_table = "".join(retention_rows) or '<tr><td colspan="5">No retention runs recorded.</td></tr>'
+
+    scheduler_rows = []
+    for run in scheduler_runs:
+        scheduler_rows.append(
+            "<tr>"
+            f"<td><code>{_e(run.get('scheduler_run_id'))}</code></td>"
+            f"<td>{_e(run.get('status'))}</td>"
+            f"<td>{_e(run.get('reason'))}</td>"
+            f"<td>{_e(_fmt_bool(run.get('dry_run')))}</td>"
+            f"<td>{_e(run.get('checked_at'))}</td>"
+            "</tr>"
+        )
+    scheduler_table = "".join(scheduler_rows) or '<tr><td colspan="5">No scheduler runs recorded.</td></tr>'
+
+    schedule_html = (
+        "<dl>"
+        f"<dt>enabled</dt><dd>{_e(_fmt_bool(retention_schedule.get('enabled')))}</dd>"
+        f"<dt>cadence</dt><dd>{_e(retention_schedule.get('cadence') or '-')}</dd>"
+        f"<dt>dry run</dt><dd>{_e(_fmt_bool(retention_schedule.get('dry_run', True)))}</dd>"
+        f"<dt>next run after</dt><dd>{_e(retention_schedule.get('next_run_after') or '-')}</dd>"
+        f"<dt>last run</dt><dd>{_e(retention_schedule.get('last_run_at') or '-')}</dd>"
+        "</dl>"
+    )
 
     selected_profile_id = context.get("selected_profile_id") or ""
     session_filter = filters.get("session_id") or ""

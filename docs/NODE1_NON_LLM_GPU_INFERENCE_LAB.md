@@ -1097,3 +1097,27 @@ Validation:
 native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase15_operator_dashboard_selftest.sh
 python -m pytest -q tests/test_node1_operator_dashboard_phase15.py
 ```
+
+## Phase 16 — scheduled retention automation
+
+Phase 16 adds a local retention scheduler for the persisted evidence index. It is intended to be run from cron/systemd or manually from the CLI. The scheduler stores its configuration in SQLite, records every due/skipped/error check, and delegates actual retention to the Phase 14 `apply_evidence_index_retention` path.
+
+Safety rules:
+
+```text
+scheduled retention disabled by default
+scheduled retention dry-run by default
+destructive scheduled apply requires explicit --apply --yes or API confirm=true
+retention scope remains evidence_index_rows_only
+no media decode in scheduler path
+no external upload
+no raw frame upload
+no identity/intent/speech/semantic claims
+```
+
+Validation:
+
+```bash
+native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase16_scheduled_retention_selftest.sh
+python -m pytest -q tests/test_node1_evidence_retention_schedule_phase16.py
+```

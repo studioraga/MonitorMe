@@ -1397,6 +1397,7 @@ class MonitorMeDB:
         limit: int = 1000,
         compact: bool = True,
         vacuum: bool = False,
+        now: str | None = None,
     ) -> dict[str, Any]:
         """Apply or dry-run an evidence-index retention policy.
 
@@ -1413,6 +1414,7 @@ class MonitorMeDB:
                 session_id=session_id,
                 camera_id=camera_id,
                 limit=limit,
+                now=now,
             )
             run_id = new_id("eret")
             now = now_iso()
@@ -1542,6 +1544,422 @@ class MonitorMeDB:
             if status:
                 sql += " AND status=?"; args.append(status)
             sql += " ORDER BY created_at DESC LIMIT ?"; args.append(max(1, min(int(limit), 1000)))
+            return self._decode_rows(self.conn.execute(sql, args))
+
+
+    @staticmethod
+    def _retention_schedule_delta(cadence: str) -> timedelta | None:
+        normalized = str(cadence or "daily").strip().lower()
+        if normalized == "hourly":
+            return timedelta(hours=1)
+        if normalized == "daily":
+            return timedelta(days=1)
+        if normalized == "weekly":
+            return timedelta(days=7)
+        if normalized == "monthly":
+            return timedelta(days=30)
+        if normalized == "manual":
+            return None
+        raise ValueError("cadence must be one of: hourly, daily, weekly, monthly, manual")
+
+    @staticmethod
+    def _retention_schedule_policy_from_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "older_than_days": row.get("older_than_days"),
+            "keep_last_per_camera": int(row.get("keep_last_per_camera") or 0),
+            "keep_last_per_session": int(row.get("keep_last_per_session") or 0),
+            "profile_id": row.get("profile_id"),
+            "session_id": row.get("session_id"),
+            "camera_id": row.get("camera_id"),
+            "limit": int(row.get("limit_profiles") or 1000),
+        }
+
+    def get_evidence_retention_schedule(self, schedule_id: str = "default") -> dict[str, Any] | None:
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT * FROM evidence_retention_schedule WHERE schedule_id=?",
+                (schedule_id,),
+            ).fetchone()
+            data = self._decode_row(row)
+            if not data:
+                return None
+            data["policy"] = self._retention_schedule_policy_from_row(data)
+            data["privacy"] = {
+                "facts_only": True,
+                "external_upload": False,
+                "raw_frame_upload": False,
+                "media_decode": False,
+                "semantic_claims": False,
+                "destructive_apply_requires_explicit_configuration": True,
+            }
+            data["schema"] = "monitorme.evidence_index_retention_schedule.v0.1"
+            return data
+
+    def configure_evidence_retention_schedule(
+        self,
+        *,
+        schedule_id: str = "default",
+        enabled: bool | None = None,
+        cadence: str | None = None,
+        older_than_days: int | None = None,
+        keep_last_per_camera: int | None = None,
+        keep_last_per_session: int | None = None,
+        profile_id: str | None = None,
+        session_id: str | None = None,
+        camera_id: str | None = None,
+        limit: int | None = None,
+        dry_run: bool | None = None,
+        compact: bool | None = None,
+        vacuum: bool | None = None,
+        next_run_after: str | None = None,
+        notes: str | None = None,
+        allow_destructive: bool = False,
+    ) -> dict[str, Any]:
+        """Create or update the scheduled evidence-index retention policy.
+
+        Scheduled retention defaults to dry-run. Setting dry_run=False requires
+        allow_destructive=True from the CLI/API confirmation layer.
+        """
+        with self._lock:
+            current = self.get_evidence_retention_schedule(schedule_id) or {}
+            now = now_iso()
+            new_cadence = str(cadence if cadence is not None else current.get("cadence", "daily")).strip().lower()
+            self._retention_schedule_delta(new_cadence)
+            new_dry_run = bool(current.get("dry_run", 1)) if dry_run is None else bool(dry_run)
+            if not new_dry_run and not allow_destructive:
+                raise ValueError("Scheduling destructive retention requires explicit confirmation")
+            # Validate next_run_after when supplied but keep NULL valid for manual/first-run schedules.
+            if next_run_after:
+                parsed = self._parse_iso_datetime(next_run_after)
+                if parsed is None:
+                    raise ValueError("next_run_after must be ISO-8601 when provided")
+                next_run_after = parsed.isoformat(timespec="seconds")
+            values = {
+                "schedule_id": schedule_id,
+                "enabled": int(bool(current.get("enabled", 0)) if enabled is None else bool(enabled)),
+                "cadence": new_cadence,
+                "older_than_days": current.get("older_than_days", 30) if older_than_days is None else max(0, int(older_than_days)),
+                "keep_last_per_camera": int(current.get("keep_last_per_camera", 1) if keep_last_per_camera is None else max(0, int(keep_last_per_camera))),
+                "keep_last_per_session": int(current.get("keep_last_per_session", 1) if keep_last_per_session is None else max(0, int(keep_last_per_session))),
+                "profile_id": current.get("profile_id") if profile_id is None else profile_id,
+                "session_id": current.get("session_id") if session_id is None else session_id,
+                "camera_id": current.get("camera_id") if camera_id is None else camera_id,
+                "limit_profiles": int(current.get("limit_profiles", 1000) if limit is None else max(1, min(int(limit), 100000))),
+                "dry_run": int(new_dry_run),
+                "compact": int(bool(current.get("compact", 1)) if compact is None else bool(compact)),
+                "vacuum": int(bool(current.get("vacuum", 0)) if vacuum is None else bool(vacuum)),
+                "next_run_after": current.get("next_run_after") if next_run_after is None else next_run_after,
+                "notes": str(current.get("notes", "") if notes is None else notes),
+                "created_at": current.get("created_at") or now,
+                "updated_at": now,
+            }
+            self.conn.execute(
+                """
+                INSERT INTO evidence_retention_schedule(
+                    schedule_id, enabled, cadence, older_than_days, keep_last_per_camera,
+                    keep_last_per_session, profile_id, session_id, camera_id, limit_profiles,
+                    dry_run, compact, vacuum, next_run_after, notes, created_at, updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(schedule_id) DO UPDATE SET
+                    enabled=excluded.enabled,
+                    cadence=excluded.cadence,
+                    older_than_days=excluded.older_than_days,
+                    keep_last_per_camera=excluded.keep_last_per_camera,
+                    keep_last_per_session=excluded.keep_last_per_session,
+                    profile_id=excluded.profile_id,
+                    session_id=excluded.session_id,
+                    camera_id=excluded.camera_id,
+                    limit_profiles=excluded.limit_profiles,
+                    dry_run=excluded.dry_run,
+                    compact=excluded.compact,
+                    vacuum=excluded.vacuum,
+                    next_run_after=excluded.next_run_after,
+                    notes=excluded.notes,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    values["schedule_id"], values["enabled"], values["cadence"], values["older_than_days"],
+                    values["keep_last_per_camera"], values["keep_last_per_session"], values["profile_id"],
+                    values["session_id"], values["camera_id"], values["limit_profiles"], values["dry_run"],
+                    values["compact"], values["vacuum"], values["next_run_after"], values["notes"],
+                    values["created_at"], values["updated_at"],
+                ),
+            )
+            self.conn.commit()
+            self.audit(
+                "evidence_retention.schedule.configure",
+                outcome="ok",
+                details={
+                    "schedule_id": schedule_id,
+                    "enabled": bool(values["enabled"]),
+                    "cadence": values["cadence"],
+                    "dry_run": bool(values["dry_run"]),
+                    "compact": bool(values["compact"]),
+                    "vacuum": bool(values["vacuum"]),
+                },
+            )
+            return self.get_evidence_retention_schedule(schedule_id) or {}
+
+    def _insert_evidence_retention_scheduler_run(
+        self,
+        *,
+        scheduler_run_id: str,
+        schedule_id: str,
+        forced: bool,
+        due: bool,
+        status: str,
+        reason: str,
+        retention_run_id: str | None,
+        policy: dict[str, Any],
+        dry_run: bool,
+        compact: bool,
+        vacuum: bool,
+        checked_at: str,
+        next_run_after: str | None,
+        result: dict[str, Any] | None = None,
+        error: str | None = None,
+    ) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO evidence_retention_scheduler_runs(
+                scheduler_run_id, schedule_id, forced, due, status, reason,
+                retention_run_id, policy_json, dry_run, compact, vacuum,
+                checked_at, next_run_after, result_json, error, completed_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                scheduler_run_id,
+                schedule_id,
+                1 if forced else 0,
+                1 if due else 0,
+                status,
+                reason,
+                retention_run_id,
+                self._json(policy),
+                1 if dry_run else 0,
+                1 if compact else 0,
+                1 if vacuum else 0,
+                checked_at,
+                next_run_after,
+                self._json(result or {}),
+                error,
+                now_iso(),
+            ),
+        )
+
+    def run_evidence_retention_schedule(
+        self,
+        *,
+        schedule_id: str = "default",
+        force: bool = False,
+        now: str | None = None,
+        dry_run_override: bool | None = None,
+        allow_destructive: bool = False,
+    ) -> dict[str, Any]:
+        """Run the scheduled evidence-index retention policy when it is due.
+
+        The scheduler executes no media decode and touches only evidence index rows
+        through the Phase 14 retention apply path.
+        """
+        with self._lock:
+            schedule = self.get_evidence_retention_schedule(schedule_id)
+            checked_dt = self._parse_iso_datetime(now) or datetime.now(timezone.utc).astimezone()
+            checked_at = checked_dt.isoformat(timespec="seconds")
+            if not schedule:
+                schedule = self.configure_evidence_retention_schedule(schedule_id=schedule_id)
+            scheduler_run_id = new_id("ers")
+            policy = self._retention_schedule_policy_from_row(schedule)
+            dry_run = bool(schedule.get("dry_run", 1)) if dry_run_override is None else bool(dry_run_override)
+            compact = bool(schedule.get("compact", 1))
+            vacuum = bool(schedule.get("vacuum", 0))
+            if not dry_run and not allow_destructive:
+                raise ValueError("Running destructive scheduled retention requires explicit confirmation")
+            enabled = bool(schedule.get("enabled"))
+            next_run_after = schedule.get("next_run_after")
+            due_at = self._parse_iso_datetime(str(next_run_after)) if next_run_after else None
+            due = bool(force or (enabled and (due_at is None or checked_dt >= due_at)))
+            reason = "forced" if force else "due" if due else "schedule_disabled" if not enabled else "not_due"
+            if not due:
+                self.conn.execute(
+                    "UPDATE evidence_retention_schedule SET last_checked_at=?, updated_at=? WHERE schedule_id=?",
+                    (checked_at, checked_at, schedule_id),
+                )
+                result = {
+                    "ok": True,
+                    "schema": "monitorme.evidence_index_retention_scheduler_result.v0.1",
+                    "scheduler_run_id": scheduler_run_id,
+                    "schedule_id": schedule_id,
+                    "status": "skipped",
+                    "reason": reason,
+                    "due": False,
+                    "forced": bool(force),
+                    "retention_run_id": None,
+                    "schedule": schedule,
+                    "privacy": {
+                        "facts_only": True,
+                        "external_upload": False,
+                        "raw_frame_upload": False,
+                        "media_decode": False,
+                        "semantic_claims": False,
+                    },
+                }
+                self._insert_evidence_retention_scheduler_run(
+                    scheduler_run_id=scheduler_run_id,
+                    schedule_id=schedule_id,
+                    forced=force,
+                    due=False,
+                    status="skipped",
+                    reason=reason,
+                    retention_run_id=None,
+                    policy=policy,
+                    dry_run=dry_run,
+                    compact=compact,
+                    vacuum=vacuum,
+                    checked_at=checked_at,
+                    next_run_after=next_run_after,
+                    result=result,
+                )
+                self.conn.commit()
+                return result
+
+            cadence_delta = self._retention_schedule_delta(str(schedule.get("cadence") or "daily"))
+            computed_next = (checked_dt + cadence_delta).isoformat(timespec="seconds") if cadence_delta else None
+            try:
+                retention = self.apply_evidence_index_retention(
+                    dry_run=dry_run,
+                    compact=compact,
+                    vacuum=vacuum,
+                    older_than_days=policy.get("older_than_days"),
+                    keep_last_per_camera=int(policy.get("keep_last_per_camera") or 0),
+                    keep_last_per_session=int(policy.get("keep_last_per_session") or 0),
+                    profile_id=policy.get("profile_id"),
+                    session_id=policy.get("session_id"),
+                    camera_id=policy.get("camera_id"),
+                    limit=int(policy.get("limit") or 1000),
+                    now=checked_at,
+                )
+                status = "dry_run" if dry_run else "completed"
+                retention_run_id = str(retention.get("run_id") or "") or None
+                self.conn.execute(
+                    """
+                    UPDATE evidence_retention_schedule
+                    SET last_checked_at=?, last_run_at=?, last_retention_run_id=?, next_run_after=?, updated_at=?
+                    WHERE schedule_id=?
+                    """,
+                    (checked_at, checked_at, retention_run_id, computed_next, checked_at, schedule_id),
+                )
+                result = {
+                    "ok": True,
+                    "schema": "monitorme.evidence_index_retention_scheduler_result.v0.1",
+                    "scheduler_run_id": scheduler_run_id,
+                    "schedule_id": schedule_id,
+                    "status": status,
+                    "reason": reason,
+                    "due": True,
+                    "forced": bool(force),
+                    "retention_run_id": retention_run_id,
+                    "next_run_after": computed_next,
+                    "retention_result": retention,
+                    "privacy": {
+                        "facts_only": True,
+                        "external_upload": False,
+                        "raw_frame_upload": False,
+                        "media_decode": False,
+                        "semantic_claims": False,
+                    },
+                }
+                self._insert_evidence_retention_scheduler_run(
+                    scheduler_run_id=scheduler_run_id,
+                    schedule_id=schedule_id,
+                    forced=force,
+                    due=True,
+                    status=status,
+                    reason=reason,
+                    retention_run_id=retention_run_id,
+                    policy=policy,
+                    dry_run=dry_run,
+                    compact=compact,
+                    vacuum=vacuum,
+                    checked_at=checked_at,
+                    next_run_after=computed_next,
+                    result=result,
+                )
+                self.conn.commit()
+                self.audit(
+                    "evidence_retention.schedule.run",
+                    outcome="ok",
+                    details={
+                        "scheduler_run_id": scheduler_run_id,
+                        "schedule_id": schedule_id,
+                        "status": status,
+                        "retention_run_id": retention_run_id,
+                        "forced": bool(force),
+                        "dry_run": dry_run,
+                    },
+                )
+                return result
+            except Exception as exc:
+                self.conn.execute(
+                    "UPDATE evidence_retention_schedule SET last_checked_at=?, updated_at=? WHERE schedule_id=?",
+                    (checked_at, checked_at, schedule_id),
+                )
+                result = {
+                    "ok": False,
+                    "schema": "monitorme.evidence_index_retention_scheduler_result.v0.1",
+                    "scheduler_run_id": scheduler_run_id,
+                    "schedule_id": schedule_id,
+                    "status": "error",
+                    "reason": reason,
+                    "due": True,
+                    "forced": bool(force),
+                    "error": str(exc),
+                    "privacy": {
+                        "facts_only": True,
+                        "external_upload": False,
+                        "raw_frame_upload": False,
+                        "media_decode": False,
+                        "semantic_claims": False,
+                    },
+                }
+                self._insert_evidence_retention_scheduler_run(
+                    scheduler_run_id=scheduler_run_id,
+                    schedule_id=schedule_id,
+                    forced=force,
+                    due=True,
+                    status="error",
+                    reason=reason,
+                    retention_run_id=None,
+                    policy=policy,
+                    dry_run=dry_run,
+                    compact=compact,
+                    vacuum=vacuum,
+                    checked_at=checked_at,
+                    next_run_after=next_run_after,
+                    result=result,
+                    error=str(exc),
+                )
+                self.conn.commit()
+                self.audit("evidence_retention.schedule.run", outcome="error", details=result)
+                return result
+
+    def list_evidence_retention_scheduler_runs(
+        self,
+        *,
+        schedule_id: str | None = None,
+        scheduler_run_id: str | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        with self._lock:
+            sql = "SELECT * FROM evidence_retention_scheduler_runs WHERE 1=1"
+            args: list[Any] = []
+            if schedule_id:
+                sql += " AND schedule_id=?"; args.append(schedule_id)
+            if scheduler_run_id:
+                sql += " AND scheduler_run_id=?"; args.append(scheduler_run_id)
+            if status:
+                sql += " AND status=?"; args.append(status)
+            sql += " ORDER BY checked_at DESC LIMIT ?"; args.append(max(1, min(int(limit), 1000)))
             return self._decode_rows(self.conn.execute(sql, args))
 
     def create_feedback(self, event_id: str, *, label: str, reason: str = "", operator: str = "operator") -> str:

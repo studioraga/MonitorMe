@@ -1,0 +1,10 @@
+[Unit]
+Description=Run MonitorMe evidence index scheduled retention hourly
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+Unit=monitor_me_evidence_retention.service
+
+[Install]
+WantedBy=timers.target

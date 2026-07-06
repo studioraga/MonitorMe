@@ -1,0 +1,14 @@
+[Unit]
+Description=MonitorMe evidence index scheduled retention check
+Documentation=README.md
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/dev/pub/ai-sys1/MonitorME/MonitorMe
+Environment=PYTHONNOUSERSITE=1
+Environment=MONITORME_DB=data/events/monitorme.db
+ExecStart=%h/dev/pub/ai-sys1/MonitorME/MonitorMe/scripts/run_evidence_retention_scheduler_once.sh
+
+[Install]
+WantedBy=default.target
