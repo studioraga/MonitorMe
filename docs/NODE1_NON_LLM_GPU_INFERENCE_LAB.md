@@ -713,3 +713,58 @@ The comparison object validates RMS, peak, silence/onset masks, correlation scor
 native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase7_audiobox_selftest.sh
 native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase7_audiobox_cuda_selftest.sh
 ```
+
+## Phase 8 — Storage batch planner and clip sampler
+
+Phase 8 implements the storage batch planning path from the TASK1 roadmap. It is a facts-only metadata workload for preparing clip reads and selecting deterministic key moments without decoding media payloads.
+
+Implemented pieces:
+
+```text
+manifest scan
+batch read plan
+key moment selection
+clip timeline features
+```
+
+Native synthetic run:
+
+```bash
+./build-cpu/node1_non_llm_gpu_lab \
+  --mode storage-batch-synthetic \
+  --clips 12 \
+  --max-batch-bytes 1600000 \
+  --max-batch-clips 3 \
+  --key-moments 4 \
+  --min-key-gap-ms 1000 \
+  --include-output
+```
+
+Manifest-backed run:
+
+```bash
+./build-cpu/node1_non_llm_gpu_lab \
+  --mode storage-batch-manifest \
+  --manifest clips.csv \
+  --max-batch-bytes 1600000 \
+  --max-batch-clips 3 \
+  --key-moments 4
+```
+
+CSV manifest fields:
+
+```text
+clip_id,path,start_ms,duration_ms,bytes,motion_score,audio_score,lighting_delta,changed_pixels
+```
+
+Output contract:
+
+```text
+storage_batch                     CPU storage planner result
+storage_batch.batches             deterministic batch read plan
+storage_batch.key_moments         selected key moments with reason strings
+storage_batch.timeline            clip timeline features and byte totals
+storage_batch.facts_only          true
+```
+
+Safety boundary: this path reports storage and timeline metadata only. It does not emit object, person, identity, speech content, behavior, intent, weapon, suspiciousness, or semantic audio/visual claims.

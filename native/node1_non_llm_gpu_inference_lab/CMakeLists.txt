@@ -19,6 +19,7 @@ add_library(node1_non_llm_gpu_lab_core
     src/dense_full_frame_cpu.cpp
     src/overlay_heavy_cpu.cpp
     src/audiobox_cpu.cpp
+    src/storage_batch_cpu.cpp
 )
 target_include_directories(node1_non_llm_gpu_lab_core
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include

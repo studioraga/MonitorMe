@@ -446,3 +446,35 @@ Manual run:
   --gpu \
   --include-output
 ```
+
+## Phase 8 — Storage batch planner and clip sampler
+
+Phase 8 adds a facts-only storage planning path for manifest-driven clip work. It does not read or decode media contents; it plans deterministic storage batches and key timeline moments from manifest metadata only.
+
+Implemented workload pieces:
+
+- manifest scan from synthetic metadata or a simple CSV manifest
+- batch read plan constrained by max bytes and max clips per batch
+- key moment selection by deterministic priority score with minimum timeline gap
+- clip timeline features including total bytes, span, covered duration, gaps, and score summaries
+
+Native synthetic validation:
+
+```bash
+./build-cpu/node1_non_llm_gpu_lab \
+  --mode storage-batch-synthetic \
+  --clips 12 \
+  --max-batch-bytes 1600000 \
+  --max-batch-clips 3 \
+  --key-moments 4 \
+  --min-key-gap-ms 1000 \
+  --include-output
+```
+
+Manifest CSV format:
+
+```text
+clip_id,path,start_ms,duration_ms,bytes,motion_score,audio_score,lighting_delta,changed_pixels
+```
+
+The output emits `storage_batch` with manifest counts, batch plans, selected key moments, timeline features, bytes planned, timing, and `facts_only=true`. It does not emit visual, audio, identity, behavior, or intent claims.

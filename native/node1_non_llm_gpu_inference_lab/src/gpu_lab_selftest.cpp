@@ -483,6 +483,45 @@ void test_isp_json() {
     require(json.find("\"edge_energy\":") != std::string::npos, "ISP JSON missing edge_energy");
 }
 
+
+void test_storage_batch_cpu() {
+    StorageBatchConfig cfg;
+    cfg.max_batch_bytes = 1600000ULL;
+    cfg.max_batch_clips = 3;
+    cfg.key_moments = 4;
+    cfg.min_key_gap_ms = 1000;
+    cfg.collect_manifest = true;
+
+    std::string error;
+    require(validate_storage_batch_config(cfg, error), "valid storage batch config rejected");
+    const auto manifest = make_synthetic_storage_manifest(12);
+    require(manifest.size() == 12, "synthetic storage manifest size mismatch");
+
+    const auto analysis = analyze_storage_batch_cpu(manifest, cfg);
+    require(analysis.ok, "storage batch analysis failed: " + analysis.error);
+    require(analysis.manifest_entries == 12, "storage manifest entry count mismatch");
+    require(analysis.clip_count == 12, "storage clip count mismatch");
+    require(analysis.batch_count >= 6, "storage batch count unexpectedly low");
+    require(analysis.key_moment_count == 4, "storage key moment count mismatch");
+    require(analysis.planned_read_bytes == analysis.total_manifest_bytes, "storage planned bytes mismatch");
+    require(analysis.timeline.clip_count == 12, "storage timeline clip count mismatch");
+    require(analysis.timeline.timeline_span_ms > 0, "storage timeline span missing");
+    require(analysis.timeline.max_priority_score >= analysis.key_moments.front().priority_score, "storage max score mismatch");
+    require(analysis.key_moments.front().clip_id == "clip_3", "storage first key moment should be clip_3");
+    require(analysis.batches.front().clip_count > 0, "storage first batch empty");
+    require(analysis.batches.front().total_bytes <= cfg.max_batch_bytes || analysis.batches.front().clip_count == 1, "storage first batch exceeds byte budget");
+
+    const std::string json = storage_batch_analysis_json(analysis, true);
+    require(json.find("\"schema\":\"node1_non_llm_storage_batch.v0.1\"") != std::string::npos, "storage JSON missing schema");
+    require(json.find("\"batches\":") != std::string::npos, "storage JSON missing batches");
+    require(json.find("\"key_moments\":") != std::string::npos, "storage JSON missing key moments");
+    require(json.find("\"timeline\":") != std::string::npos, "storage JSON missing timeline");
+    require(json.find("\"facts_only\":true") != std::string::npos, "storage JSON missing facts_only");
+
+    cfg.max_batch_bytes = 0;
+    require(!validate_storage_batch_config(cfg, error), "invalid storage max_batch_bytes accepted");
+}
+
 } // namespace
 
 int main() {
@@ -497,6 +536,7 @@ int main() {
         test_dense_full_frame_cpu();
         test_overlay_heavy_cpu();
         test_audiobox_cpu();
+        test_storage_batch_cpu();
         test_isp_filter_reference_equivalence();
         test_isp_known_values();
         test_pgm_ppm_io();

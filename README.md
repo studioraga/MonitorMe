@@ -909,3 +909,13 @@ python -m monitor_me.cli gpu-lab-audiobox-synthetic --sync-drift-samples 64
 ```
 
 When the CUDA build is available and `MONITORME_GPU_LAB_PREFER_CUDA=1`, the result includes `audiobox`, `audiobox_cuda`, and `audiobox_cpu_cuda_comparison`. The AudioBox path reports signal metrics only and does not infer speech content, speaker identity, behavior, or intent.
+
+### Node1 non-LLM GPU lab Phase 8
+
+Phase 8 adds the storage batch planner and clip sampler path. It scans clip manifest metadata, builds a deterministic batch read plan, selects key moments, and emits clip timeline features. The native mode is:
+
+```bash
+python -m monitor_me.cli gpu-lab-storage-batch-synthetic --clips 12
+```
+
+The result includes `storage_batch` facts with batch count, planned read bytes, key moments, timeline span, gap metrics, and manifest metadata when `--include-output` is used natively. This path is metadata-only and does not decode media or infer visual/audio semantics, identity, behavior, or intent.

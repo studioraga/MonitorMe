@@ -7,6 +7,7 @@
 #include "node1_non_llm/dense_full_frame.hpp"
 #include "node1_non_llm/overlay_heavy.hpp"
 #include "node1_non_llm/audiobox.hpp"
+#include "node1_non_llm/storage_batch.hpp"
 
 namespace node1_non_llm {
 
@@ -24,6 +25,10 @@ AudioBoxAnalysis analyze_audiobox_cpu(
     const float* primary_samples,
     const float* reference_samples,
     const AudioBoxConfig& cfg);
+
+StorageBatchAnalysis analyze_storage_batch_cpu(
+    const std::vector<StorageManifestEntry>& manifest,
+    const StorageBatchConfig& cfg);
 
 #ifdef NODE1_NON_LLM_WITH_CUDA
 FrameAnalysis analyze_gray_frames_cuda(

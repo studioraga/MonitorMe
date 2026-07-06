@@ -792,3 +792,155 @@ std::string audiobox_cpu_cuda_comparison_json(const AudioBoxAnalysis& cpu, const
 }
 
 } // namespace node1_non_llm
+
+namespace node1_non_llm {
+
+namespace {
+
+std::string storage_manifest_entry_json(const StorageManifestEntry& e) {
+    std::ostringstream os;
+    os << "{";
+    os << "\"clip_id\":\"" << json_escape(e.clip_id) << "\",";
+    os << "\"path\":\"" << json_escape(e.path) << "\",";
+    os << "\"start_ms\":" << e.start_ms << ",";
+    os << "\"duration_ms\":" << e.duration_ms << ",";
+    os << "\"bytes\":" << e.bytes << ",";
+    os << "\"motion_score\":" << e.motion_score << ",";
+    os << "\"audio_score\":" << e.audio_score << ",";
+    os << "\"lighting_delta\":" << e.lighting_delta << ",";
+    os << "\"changed_pixels\":" << e.changed_pixels << ",";
+    os << "\"active_tiles\":" << e.active_tiles << ",";
+    os << "\"priority_score\":" << e.priority_score;
+    os << "}";
+    return os.str();
+}
+
+std::string storage_manifest_json(const std::vector<StorageManifestEntry>& entries) {
+    std::ostringstream os;
+    os << "[";
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        if (i != 0) os << ",";
+        os << storage_manifest_entry_json(entries[i]);
+    }
+    os << "]";
+    return os.str();
+}
+
+std::string int_vector_json_local(const std::vector<int>& values) {
+    std::ostringstream os;
+    os << "[";
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        if (i != 0) os << ",";
+        os << values[i];
+    }
+    os << "]";
+    return os.str();
+}
+
+std::string storage_batch_read_json(const StorageBatchReadPlan& b) {
+    std::ostringstream os;
+    os << "{";
+    os << "\"batch_index\":" << b.batch_index << ",";
+    os << "\"first_clip_index\":" << b.first_clip_index << ",";
+    os << "\"clip_count\":" << b.clip_count << ",";
+    os << "\"start_ms\":" << b.start_ms << ",";
+    os << "\"end_ms\":" << b.end_ms << ",";
+    os << "\"total_bytes\":" << b.total_bytes << ",";
+    os << "\"clip_indices\":" << int_vector_json_local(b.clip_indices);
+    os << "}";
+    return os.str();
+}
+
+std::string storage_batches_json(const std::vector<StorageBatchReadPlan>& batches) {
+    std::ostringstream os;
+    os << "[";
+    for (std::size_t i = 0; i < batches.size(); ++i) {
+        if (i != 0) os << ",";
+        os << storage_batch_read_json(batches[i]);
+    }
+    os << "]";
+    return os.str();
+}
+
+std::string storage_key_moment_json(const StorageKeyMoment& k) {
+    std::ostringstream os;
+    os << "{";
+    os << "\"rank\":" << k.rank << ",";
+    os << "\"clip_index\":" << k.clip_index << ",";
+    os << "\"clip_id\":\"" << json_escape(k.clip_id) << "\",";
+    os << "\"start_ms\":" << k.start_ms << ",";
+    os << "\"duration_ms\":" << k.duration_ms << ",";
+    os << "\"priority_score\":" << k.priority_score << ",";
+    os << "\"motion_score\":" << k.motion_score << ",";
+    os << "\"audio_score\":" << k.audio_score << ",";
+    os << "\"lighting_delta\":" << k.lighting_delta << ",";
+    os << "\"changed_pixels\":" << k.changed_pixels << ",";
+    os << "\"reason\":\"" << json_escape(k.reason) << "\"";
+    os << "}";
+    return os.str();
+}
+
+std::string storage_key_moments_json(const std::vector<StorageKeyMoment>& key_moments) {
+    std::ostringstream os;
+    os << "[";
+    for (std::size_t i = 0; i < key_moments.size(); ++i) {
+        if (i != 0) os << ",";
+        os << storage_key_moment_json(key_moments[i]);
+    }
+    os << "]";
+    return os.str();
+}
+
+std::string storage_timeline_json(const StorageTimelineFeatures& t) {
+    std::ostringstream os;
+    os << "{";
+    os << "\"clip_count\":" << t.clip_count << ",";
+    os << "\"total_bytes\":" << t.total_bytes << ",";
+    os << "\"timeline_start_ms\":" << t.timeline_start_ms << ",";
+    os << "\"timeline_end_ms\":" << t.timeline_end_ms << ",";
+    os << "\"timeline_span_ms\":" << t.timeline_span_ms << ",";
+    os << "\"covered_duration_ms\":" << t.covered_duration_ms << ",";
+    os << "\"max_gap_ms\":" << t.max_gap_ms << ",";
+    os << "\"mean_gap_ms\":" << t.mean_gap_ms << ",";
+    os << "\"mean_motion_score\":" << t.mean_motion_score << ",";
+    os << "\"mean_audio_score\":" << t.mean_audio_score << ",";
+    os << "\"mean_lighting_delta\":" << t.mean_lighting_delta << ",";
+    os << "\"mean_priority_score\":" << t.mean_priority_score << ",";
+    os << "\"max_priority_score\":" << t.max_priority_score;
+    os << "}";
+    return os.str();
+}
+
+} // namespace
+
+std::string storage_batch_analysis_json(const StorageBatchAnalysis& a, bool include_manifest) {
+    std::ostringstream os;
+    os << "{";
+    os << "\"ok\":" << bool_json(a.ok) << ",";
+    os << "\"backend\":\"" << json_escape(a.backend) << "\",";
+    os << "\"schema\":\"" << json_escape(a.schema) << "\",";
+    os << "\"error\":\"" << json_escape(a.error) << "\",";
+    os << "\"manifest_entries\":" << a.manifest_entries << ",";
+    os << "\"clip_count\":" << a.clip_count << ",";
+    os << "\"batch_count\":" << a.batch_count << ",";
+    os << "\"key_moment_count\":" << a.key_moment_count << ",";
+    os << "\"max_batch_bytes\":" << a.max_batch_bytes << ",";
+    os << "\"max_batch_clips\":" << a.max_batch_clips << ",";
+    os << "\"min_key_gap_ms\":" << a.min_key_gap_ms << ",";
+    os << "\"total_manifest_bytes\":" << a.total_manifest_bytes << ",";
+    os << "\"planned_read_bytes\":" << a.planned_read_bytes << ",";
+    os << "\"manifest_sorted\":" << bool_json(a.manifest_sorted) << ",";
+    os << "\"facts_only\":true,";
+    os << "\"note\":\"Storage batch planning and clip timeline sampling workload metrics only; no visual, audio, identity, behavior, or intent claim is emitted.\",";
+    os << "\"timeline\":" << storage_timeline_json(a.timeline) << ",";
+    os << "\"batches\":" << storage_batches_json(a.batches) << ",";
+    os << "\"key_moments\":" << storage_key_moments_json(a.key_moments) << ",";
+    os << "\"timing\":" << stage_timing_json(a.timing);
+    if (include_manifest) {
+        os << ",\"manifest\":" << storage_manifest_json(a.manifest);
+    }
+    os << "}";
+    return os.str();
+}
+
+} // namespace node1_non_llm

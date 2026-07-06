@@ -149,6 +149,20 @@ def cmd_gpu_lab_audiobox_synthetic(args: argparse.Namespace) -> int:
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0 if result.get("ok") else 3
 
+
+def cmd_gpu_lab_storage_batch_synthetic(args: argparse.Namespace) -> int:
+    config = GpuLabConfig.from_env(enabled=True)
+    runner = Node1NonLLMGpuLabRunner(config)
+    result = runner.run_storage_batch_synthetic(
+        clips=args.clips,
+        max_batch_bytes=args.max_batch_bytes,
+        max_batch_clips=args.max_batch_clips,
+        key_moments=args.key_moments,
+        min_key_gap_ms=args.min_key_gap_ms,
+    )
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0 if result.get("ok") else 3
+
 def cmd_gpu_lab_isp_synthetic(args: argparse.Namespace) -> int:
     config = GpuLabConfig.from_env(enabled=True)
     runner = Node1NonLLMGpuLabRunner(config)
@@ -421,6 +435,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-lag", type=int, default=128)
     p.add_argument("--sync-drift-samples", type=int, default=64)
     p.set_defaults(func=cmd_gpu_lab_audiobox_synthetic)
+
+
+    p = sub.add_parser("gpu-lab-storage-batch-synthetic", help="Run storage manifest scan, batch read planning, key moment selection, and clip timeline feature validation")
+    p.add_argument("--clips", type=int, default=12)
+    p.add_argument("--max-batch-bytes", type=int, default=2 * 1024 * 1024)
+    p.add_argument("--max-batch-clips", type=int, default=4)
+    p.add_argument("--key-moments", type=int, default=5)
+    p.add_argument("--min-key-gap-ms", type=int, default=1000)
+    p.set_defaults(func=cmd_gpu_lab_storage_batch_synthetic)
 
     p = sub.add_parser("gpu-lab-isp-synthetic", help="Run ISP synthetic filter validation; CUDA comparison is used when available")
     p.add_argument("--filter", default="sobel-mag", choices=["blur", "sharpen", "edge", "sobel-x", "sobel-y", "sobel-mag"])
