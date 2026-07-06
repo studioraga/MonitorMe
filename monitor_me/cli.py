@@ -274,6 +274,63 @@ def cmd_artifacts(args: argparse.Namespace) -> int:
     db.close()
     return 0
 
+
+def cmd_evidence_index(args: argparse.Namespace) -> int:
+    db = _db(args)
+    result = db.list_evidence_profiles(
+        event_id=args.event_id,
+        session_id=args.session_id,
+        camera_id=args.camera_id,
+        limit=args.limit,
+    )
+    print(json.dumps({"evidence_profiles": result, "count": len(result)}, indent=2, sort_keys=True))
+    db.close()
+    return 0
+
+
+def cmd_evidence_fingerprints(args: argparse.Namespace) -> int:
+    db = _db(args)
+    result = db.list_evidence_fingerprints(
+        profile_id=args.profile_id,
+        event_id=args.event_id,
+        session_id=args.session_id,
+        camera_id=args.camera_id,
+        from_media=args.from_media,
+        limit=args.limit,
+    )
+    print(json.dumps({"evidence_fingerprints": result, "count": len(result)}, indent=2, sort_keys=True))
+    db.close()
+    return 0
+
+
+def cmd_evidence_dedup_groups(args: argparse.Namespace) -> int:
+    db = _db(args)
+    result = db.list_evidence_dedup_groups(
+        profile_id=args.profile_id,
+        event_id=args.event_id,
+        session_id=args.session_id,
+        camera_id=args.camera_id,
+        limit=args.limit,
+    )
+    print(json.dumps({"evidence_dedup_groups": result, "count": len(result)}, indent=2, sort_keys=True))
+    db.close()
+    return 0
+
+
+def cmd_evidence_key_moments(args: argparse.Namespace) -> int:
+    db = _db(args)
+    result = db.list_evidence_key_moments(
+        profile_id=args.profile_id,
+        event_id=args.event_id,
+        session_id=args.session_id,
+        camera_id=args.camera_id,
+        limit=args.limit,
+    )
+    print(json.dumps({"evidence_key_moments": result, "count": len(result)}, indent=2, sort_keys=True))
+    db.close()
+    return 0
+
+
 def cmd_ask(args: argparse.Namespace) -> int:
     db = _db(args)
     assistant = MonitorMeAssistant(db)
@@ -567,6 +624,39 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--artifact-type")
     p.add_argument("--limit", type=int, default=50)
     p.set_defaults(func=cmd_artifacts)
+
+
+    p = sub.add_parser("evidence-index", help="List persisted evidence pipeline profile rows")
+    p.add_argument("--event-id")
+    p.add_argument("--session-id")
+    p.add_argument("--camera-id")
+    p.add_argument("--limit", type=int, default=50)
+    p.set_defaults(func=cmd_evidence_index)
+
+    p = sub.add_parser("evidence-fingerprints", help="List persisted evidence fingerprint rows")
+    p.add_argument("--profile-id")
+    p.add_argument("--event-id")
+    p.add_argument("--session-id")
+    p.add_argument("--camera-id")
+    p.add_argument("--from-media", action="store_true")
+    p.add_argument("--limit", type=int, default=50)
+    p.set_defaults(func=cmd_evidence_fingerprints)
+
+    p = sub.add_parser("evidence-dedup-groups", help="List persisted evidence duplicate groups")
+    p.add_argument("--profile-id")
+    p.add_argument("--event-id")
+    p.add_argument("--session-id")
+    p.add_argument("--camera-id")
+    p.add_argument("--limit", type=int, default=50)
+    p.set_defaults(func=cmd_evidence_dedup_groups)
+
+    p = sub.add_parser("evidence-key-moments", help="List persisted evidence key moments")
+    p.add_argument("--profile-id")
+    p.add_argument("--event-id")
+    p.add_argument("--session-id")
+    p.add_argument("--camera-id")
+    p.add_argument("--limit", type=int, default=50)
+    p.set_defaults(func=cmd_evidence_key_moments)
 
     p = sub.add_parser("ask", help="Ask a DB-grounded MonitorMe question")
     p.add_argument("question")

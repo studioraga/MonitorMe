@@ -784,6 +784,7 @@ class LocalCameraCaptureRunner:
                     "event_id": evidence_pipeline_result.get("event_id"),
                     "manifest_artifact_id": evidence_pipeline_result.get("manifest_artifact_id"),
                     "profile_artifact_id": evidence_pipeline_result.get("profile_artifact_id"),
+                    "evidence_index_profile_id": evidence_pipeline_result.get("evidence_index_profile_id"),
                     "manifest_csv_path": evidence_pipeline_result.get("manifest_csv_path"),
                     "profile_path": evidence_pipeline_result.get("profile_path"),
                     "error": evidence_pipeline_result.get("error"),
@@ -1098,6 +1099,17 @@ class LocalCameraCaptureRunner:
                 "note": "Facts-only capture-run evidence indexing event. It stores storage/fingerprint/dedup/timeline/safety metadata only.",
             },
         )
+        evidence_index_profile_id = self.db.persist_evidence_pipeline_index(
+            event_id=event_id,
+            session_id=session_id,
+            camera_id=cfg.camera_id,
+            manifest_artifact_id=csv_artifact_id,
+            profile_artifact_id=profile_artifact_id,
+            manifest_csv_path=str(csv_path),
+            profile_path=str(profile_path),
+            evidence=evidence,
+            capture_manifest_rows=len(rows),
+        )
         self.db.audit(
             "evidence_pipeline.capture_run.create",
             camera_id=cfg.camera_id,
@@ -1106,6 +1118,7 @@ class LocalCameraCaptureRunner:
             details={
                 "manifest_artifact_id": csv_artifact_id,
                 "profile_artifact_id": profile_artifact_id,
+                "evidence_index_profile_id": evidence_index_profile_id,
                 "fingerprint_count": evidence.get("fingerprint_count"),
                 "media_fingerprint_count": evidence.get("media_fingerprint_count"),
                 "synthetic_fingerprint_count": evidence.get("synthetic_fingerprint_count"),
@@ -1119,6 +1132,7 @@ class LocalCameraCaptureRunner:
         return {
             "ok": bool(result.get("ok")),
             "event_id": event_id,
+            "evidence_index_profile_id": evidence_index_profile_id,
             "manifest_artifact_id": csv_artifact_id,
             "profile_artifact_id": profile_artifact_id,
             "manifest_csv_path": str(csv_path),

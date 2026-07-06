@@ -942,3 +942,42 @@ Validation:
 native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase11_real_media_fingerprint_selftest.sh
 python -m pytest -q tests/test_node1_capture_real_fingerprint_phase11.py
 ```
+
+### Phase 12: evidence index persistence / DB migration
+
+Phase 12 persists the capture-run evidence pipeline profile into normalized SQLite tables instead of relying only on the large JSON artifact and `events.attrs_json`. The migration `005_evidence_index_persistence.sql` creates queryable rows for evidence profiles, per-keyframe fingerprints, duplicate groups, and key moments.
+
+After `--evidence-pipeline-enabled`, capture-run still writes:
+
+```text
+capture_evidence_manifest.csv
+evidence_pipeline_profile.json
+evidence_pipeline_indexed event
+```
+
+It now also persists:
+
+```text
+evidence_pipeline_profiles
+evidence_fingerprints
+evidence_dedup_groups
+evidence_key_moments
+```
+
+Read back persisted evidence index rows:
+
+```bash
+python -m monitor_me.cli evidence-index --session-id <session_id>
+python -m monitor_me.cli evidence-fingerprints --session-id <session_id> --from-media --limit 20
+python -m monitor_me.cli evidence-dedup-groups --session-id <session_id>
+python -m monitor_me.cli evidence-key-moments --session-id <session_id>
+```
+
+The persisted index remains facts-only. It stores storage paths, hashes, fingerprint integers, histogram bins, duplicate accounting, key-moment metadata, safety validator output, and latency/throughput counters. It does not store identity, behavior, intent, suspiciousness, object claims, or speech-content claims.
+
+Validate Phase 12:
+
+```bash
+native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase12_evidence_index_selftest.sh
+python -m pytest -q tests/test_node1_evidence_index_phase12.py
+```

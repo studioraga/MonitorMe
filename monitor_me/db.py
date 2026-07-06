@@ -795,6 +795,309 @@ class MonitorMeDB:
             sql += " ORDER BY created_at DESC LIMIT ?"; args.append(limit)
             return self._decode_rows(self.conn.execute(sql, args))
 
+
+    def persist_evidence_pipeline_index(
+        self,
+        *,
+        event_id: str,
+        session_id: str | None,
+        camera_id: str,
+        manifest_artifact_id: str | None,
+        profile_artifact_id: str | None,
+        manifest_csv_path: str,
+        profile_path: str,
+        evidence: dict[str, Any],
+        capture_manifest_rows: int = 0,
+    ) -> str:
+        """Persist a queryable facts-only evidence index for one evidence pipeline event.
+
+        The original event row remains the compact session-level record. These
+        tables make fingerprints, duplicate groups, and key moments queryable
+        without reparsing a large profile artifact.
+        """
+        with self._lock:
+            event = self.get_event(event_id)
+            if not event:
+                raise KeyError(f"event_id not found: {event_id}")
+            now = now_iso()
+            existing = self.conn.execute(
+                "SELECT profile_id FROM evidence_pipeline_profiles WHERE event_id=?",
+                (event_id,),
+            ).fetchone()
+            if existing:
+                old_profile_id = str(existing["profile_id"])
+                self.conn.execute("DELETE FROM evidence_key_moments WHERE profile_id=?", (old_profile_id,))
+                self.conn.execute("DELETE FROM evidence_dedup_groups WHERE profile_id=?", (old_profile_id,))
+                self.conn.execute("DELETE FROM evidence_fingerprints WHERE profile_id=?", (old_profile_id,))
+                self.conn.execute("DELETE FROM evidence_pipeline_profiles WHERE profile_id=?", (old_profile_id,))
+            profile_id = new_id("eidx")
+            safety = evidence.get("safety") if isinstance(evidence.get("safety"), dict) else {}
+            latency = evidence.get("latency") if isinstance(evidence.get("latency"), dict) else {}
+            timeline = evidence.get("timeline") if isinstance(evidence.get("timeline"), dict) else {}
+            self.conn.execute(
+                """
+                INSERT INTO evidence_pipeline_profiles(
+                    profile_id, event_id, session_id, camera_id, manifest_artifact_id, profile_artifact_id,
+                    manifest_csv_path, profile_path, native_schema, capture_manifest_rows, fingerprint_count,
+                    media_fingerprint_count, synthetic_fingerprint_count, real_media_ingestion,
+                    duplicate_group_count, duplicate_clip_count, unique_clip_count, key_moment_count,
+                    planned_read_bytes, total_manifest_bytes, safety_ok, violation_count, facts_only,
+                    timeline_json, latency_json, safety_json, created_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    profile_id,
+                    event_id,
+                    session_id,
+                    camera_id,
+                    manifest_artifact_id,
+                    profile_artifact_id,
+                    manifest_csv_path,
+                    profile_path,
+                    str(evidence.get("schema") or ""),
+                    int(capture_manifest_rows or evidence.get("manifest_entries") or 0),
+                    int(evidence.get("fingerprint_count") or 0),
+                    int(evidence.get("media_fingerprint_count") or 0),
+                    int(evidence.get("synthetic_fingerprint_count") or 0),
+                    1 if evidence.get("real_media_ingestion") else 0,
+                    int(evidence.get("duplicate_group_count") or 0),
+                    int(evidence.get("duplicate_clip_count") or 0),
+                    int(evidence.get("unique_clip_count") or 0),
+                    int(evidence.get("key_moment_count") or 0),
+                    int(evidence.get("planned_read_bytes") or 0),
+                    int(evidence.get("total_manifest_bytes") or 0),
+                    1 if safety.get("ok") else 0,
+                    int(safety.get("violation_count") or 0),
+                    1 if evidence.get("facts_only", True) else 0,
+                    self._json(timeline),
+                    self._json(latency),
+                    self._json(safety),
+                    now,
+                ),
+            )
+            for item in evidence.get("fingerprints") or []:
+                if not isinstance(item, dict):
+                    continue
+                hist = item.get("histogram16") or item.get("histogram") or []
+                self.conn.execute(
+                    """
+                    INSERT INTO evidence_fingerprints(
+                        fingerprint_id, profile_id, event_id, session_id, camera_id, clip_id, clip_index,
+                        path, start_ms, duration_ms, from_media, fingerprint_source, decoded_width,
+                        decoded_height, ahash64, dhash64, fingerprint64, fingerprint_hex, histogram_json,
+                        histogram_bins, duplicate_group, duplicate_of, nearest_hamming, fingerprint_score,
+                        created_at
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        new_id("efp"),
+                        profile_id,
+                        event_id,
+                        session_id,
+                        camera_id,
+                        str(item.get("clip_id") or ""),
+                        int(item.get("clip_index") if item.get("clip_index") is not None else -1),
+                        str(item.get("path") or ""),
+                        int(item.get("start_ms") or 0),
+                        int(item.get("duration_ms") or 0),
+                        1 if item.get("from_media") else 0,
+                        str(item.get("fingerprint_source") or ("decoded_keyframe" if item.get("from_media") else "metadata_synthetic")),
+                        int(item.get("decoded_width") or 0),
+                        int(item.get("decoded_height") or 0),
+                        str(item.get("ahash64") or ""),
+                        str(item.get("dhash64") or ""),
+                        str(item.get("fingerprint64") or ""),
+                        str(item.get("fingerprint_hex") or ""),
+                        self._json(hist if isinstance(hist, list) else []),
+                        int(item.get("histogram_bins") or (len(hist) if isinstance(hist, list) else 0)),
+                        int(item.get("duplicate_group") if item.get("duplicate_group") is not None else -1),
+                        int(item.get("duplicate_of") if item.get("duplicate_of") is not None else -1),
+                        int(item.get("nearest_hamming") if item.get("nearest_hamming") is not None else -1),
+                        float(item.get("fingerprint_score") or 0.0),
+                        now,
+                    ),
+                )
+            for group in evidence.get("duplicate_groups") or []:
+                if not isinstance(group, dict):
+                    continue
+                self.conn.execute(
+                    """
+                    INSERT INTO evidence_dedup_groups(
+                        dedup_id, profile_id, event_id, session_id, camera_id, group_id,
+                        representative_clip_id, representative_clip_index, group_size, duplicate_count,
+                        min_hamming, max_hamming, clip_ids_json, clip_indices_json, created_at
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        new_id("edup"),
+                        profile_id,
+                        event_id,
+                        session_id,
+                        camera_id,
+                        int(group.get("group_id") or 0),
+                        str(group.get("representative_clip_id") or ""),
+                        int(group.get("representative_clip_index") if group.get("representative_clip_index") is not None else -1),
+                        int(group.get("group_size") or 0),
+                        int(group.get("duplicate_count") or 0),
+                        int(group.get("min_hamming") if group.get("min_hamming") is not None else -1),
+                        int(group.get("max_hamming") if group.get("max_hamming") is not None else -1),
+                        self._json(group.get("clip_ids") if isinstance(group.get("clip_ids"), list) else []),
+                        self._json(group.get("clip_indices") if isinstance(group.get("clip_indices"), list) else []),
+                        now,
+                    ),
+                )
+            by_clip_index: dict[int, dict[str, Any]] = {}
+            for item in evidence.get("fingerprints") or []:
+                if isinstance(item, dict):
+                    try:
+                        by_clip_index[int(item.get("clip_index") or -1)] = item
+                    except (TypeError, ValueError):
+                        pass
+            for item in evidence.get("key_moments") or []:
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    clip_index = int(item.get("clip_index") if item.get("clip_index") is not None else -1)
+                except (TypeError, ValueError):
+                    clip_index = -1
+                fp = by_clip_index.get(clip_index, {})
+                self.conn.execute(
+                    """
+                    INSERT INTO evidence_key_moments(
+                        key_moment_id, profile_id, event_id, session_id, camera_id, rank, clip_id,
+                        clip_index, start_ms, duration_ms, reason, priority_score, motion_score,
+                        audio_score, lighting_delta, changed_pixels, duplicate_group, created_at
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                    """,
+                    (
+                        new_id("ekm"),
+                        profile_id,
+                        event_id,
+                        session_id,
+                        camera_id,
+                        int(item.get("rank") or 0),
+                        str(item.get("clip_id") or ""),
+                        clip_index,
+                        int(item.get("start_ms") or 0),
+                        int(item.get("duration_ms") or 0),
+                        str(item.get("reason") or ""),
+                        float(item.get("priority_score") or 0.0),
+                        float(item.get("motion_score") or 0.0),
+                        float(item.get("audio_score") or 0.0),
+                        float(item.get("lighting_delta") or 0.0),
+                        int(item.get("changed_pixels") or 0),
+                        int(fp.get("duplicate_group") if fp.get("duplicate_group") is not None else -1),
+                        now,
+                    ),
+                )
+            self.conn.commit()
+            self.audit(
+                "evidence_index.persist",
+                camera_id=camera_id,
+                event_id=event_id,
+                session_id=session_id,
+                details={
+                    "profile_id": profile_id,
+                    "fingerprint_count": int(evidence.get("fingerprint_count") or 0),
+                    "duplicate_group_count": int(evidence.get("duplicate_group_count") or 0),
+                    "key_moment_count": int(evidence.get("key_moment_count") or 0),
+                    "facts_only": True,
+                },
+            )
+            return profile_id
+
+    def list_evidence_profiles(
+        self,
+        *,
+        event_id: str | None = None,
+        session_id: str | None = None,
+        camera_id: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        with self._lock:
+            sql = "SELECT * FROM evidence_pipeline_profiles WHERE 1=1"
+            args: list[Any] = []
+            if event_id:
+                sql += " AND event_id=?"; args.append(event_id)
+            if session_id:
+                sql += " AND session_id=?"; args.append(session_id)
+            if camera_id:
+                sql += " AND camera_id=?"; args.append(camera_id)
+            sql += " ORDER BY created_at DESC LIMIT ?"; args.append(int(limit))
+            return self._decode_rows(self.conn.execute(sql, args))
+
+    def list_evidence_fingerprints(
+        self,
+        *,
+        profile_id: str | None = None,
+        event_id: str | None = None,
+        session_id: str | None = None,
+        camera_id: str | None = None,
+        from_media: bool | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        with self._lock:
+            sql = "SELECT * FROM evidence_fingerprints WHERE 1=1"
+            args: list[Any] = []
+            if profile_id:
+                sql += " AND profile_id=?"; args.append(profile_id)
+            if event_id:
+                sql += " AND event_id=?"; args.append(event_id)
+            if session_id:
+                sql += " AND session_id=?"; args.append(session_id)
+            if camera_id:
+                sql += " AND camera_id=?"; args.append(camera_id)
+            if from_media is not None:
+                sql += " AND from_media=?"; args.append(1 if from_media else 0)
+            sql += " ORDER BY profile_id, clip_index LIMIT ?"; args.append(int(limit))
+            return self._decode_rows(self.conn.execute(sql, args))
+
+    def list_evidence_dedup_groups(
+        self,
+        *,
+        profile_id: str | None = None,
+        event_id: str | None = None,
+        session_id: str | None = None,
+        camera_id: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        with self._lock:
+            sql = "SELECT * FROM evidence_dedup_groups WHERE 1=1"
+            args: list[Any] = []
+            if profile_id:
+                sql += " AND profile_id=?"; args.append(profile_id)
+            if event_id:
+                sql += " AND event_id=?"; args.append(event_id)
+            if session_id:
+                sql += " AND session_id=?"; args.append(session_id)
+            if camera_id:
+                sql += " AND camera_id=?"; args.append(camera_id)
+            sql += " ORDER BY profile_id, group_id LIMIT ?"; args.append(int(limit))
+            return self._decode_rows(self.conn.execute(sql, args))
+
+    def list_evidence_key_moments(
+        self,
+        *,
+        profile_id: str | None = None,
+        event_id: str | None = None,
+        session_id: str | None = None,
+        camera_id: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        with self._lock:
+            sql = "SELECT * FROM evidence_key_moments WHERE 1=1"
+            args: list[Any] = []
+            if profile_id:
+                sql += " AND profile_id=?"; args.append(profile_id)
+            if event_id:
+                sql += " AND event_id=?"; args.append(event_id)
+            if session_id:
+                sql += " AND session_id=?"; args.append(session_id)
+            if camera_id:
+                sql += " AND camera_id=?"; args.append(camera_id)
+            sql += " ORDER BY profile_id, rank LIMIT ?"; args.append(int(limit))
+            return self._decode_rows(self.conn.execute(sql, args))
+
     def create_feedback(self, event_id: str, *, label: str, reason: str = "", operator: str = "operator") -> str:
         with self._lock:
             event = self.get_event(event_id)
