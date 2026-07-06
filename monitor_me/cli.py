@@ -245,6 +245,7 @@ def cmd_capture_run(args: argparse.Namespace) -> int:
         evidence_pipeline_fingerprint_width=args.evidence_pipeline_fingerprint_width,
         evidence_pipeline_fingerprint_height=args.evidence_pipeline_fingerprint_height,
         evidence_pipeline_fingerprint_cycle=args.evidence_pipeline_fingerprint_cycle,
+        evidence_pipeline_real_fingerprint_enabled=not args.evidence_pipeline_no_real_fingerprints,
     )
     result = LocalCameraCaptureRunner(db, config).run().as_dict()
     print(json.dumps(result, indent=2, sort_keys=True))
@@ -547,6 +548,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--evidence-pipeline-fingerprint-width", type=int, default=16)
     p.add_argument("--evidence-pipeline-fingerprint-height", type=int, default=16)
     p.add_argument("--evidence-pipeline-fingerprint-cycle", type=int, default=6)
+    p.add_argument("--evidence-pipeline-no-real-fingerprints", action="store_true", help="Do not decode stored keyframes into real media fingerprints; fall back to manifest metadata fingerprints")
     p.set_defaults(func=cmd_capture_run)
 
     p = sub.add_parser("events", help="List normalized events")

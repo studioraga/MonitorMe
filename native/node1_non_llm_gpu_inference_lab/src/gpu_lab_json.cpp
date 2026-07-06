@@ -810,6 +810,10 @@ std::string storage_manifest_entry_json(const StorageManifestEntry& e) {
     os << "\"lighting_delta\":" << e.lighting_delta << ",";
     os << "\"changed_pixels\":" << e.changed_pixels << ",";
     os << "\"active_tiles\":" << e.active_tiles << ",";
+    os << "\"has_media_fingerprint\":" << bool_json(e.has_media_fingerprint) << ",";
+    os << "\"fingerprint_source\":\"" << json_escape(e.fingerprint_source) << "\",";
+    os << "\"decoded_width\":" << e.decoded_width << ",";
+    os << "\"decoded_height\":" << e.decoded_height << ",";
     os << "\"priority_score\":" << e.priority_score;
     os << "}";
     return os.str();
@@ -978,6 +982,10 @@ std::string evidence_fingerprint_json(const EvidenceFingerprint& f, bool include
     os << "\"dhash64\":" << f.dhash64 << ",";
     os << "\"fingerprint64\":" << f.fingerprint64 << ",";
     os << "\"histogram_bins\":" << f.histogram_bins << ",";
+    os << "\"from_media\":" << bool_json(f.from_media) << ",";
+    os << "\"fingerprint_source\":\"" << json_escape(f.fingerprint_source) << "\",";
+    os << "\"decoded_width\":" << f.decoded_width << ",";
+    os << "\"decoded_height\":" << f.decoded_height << ",";
     os << "\"duplicate_group\":" << f.duplicate_group << ",";
     os << "\"duplicate_of\":" << f.duplicate_of << ",";
     os << "\"nearest_hamming\":" << f.nearest_hamming << ",";
@@ -1073,6 +1081,9 @@ std::string evidence_pipeline_analysis_json(const EvidencePipelineAnalysis& a, b
     os << "\"error\":\"" << json_escape(a.error) << "\",";
     os << "\"manifest_entries\":" << a.manifest_entries << ",";
     os << "\"fingerprint_count\":" << a.fingerprint_count << ",";
+    os << "\"media_fingerprint_count\":" << a.media_fingerprint_count << ",";
+    os << "\"synthetic_fingerprint_count\":" << a.synthetic_fingerprint_count << ",";
+    os << "\"real_media_ingestion\":" << bool_json(a.media_fingerprint_count > 0) << ",";
     os << "\"duplicate_group_count\":" << a.duplicate_group_count << ",";
     os << "\"duplicate_clip_count\":" << a.duplicate_clip_count << ",";
     os << "\"unique_clip_count\":" << a.unique_clip_count << ",";

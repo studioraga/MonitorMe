@@ -121,6 +121,7 @@ class LocalCaptureConfig:
     evidence_pipeline_fingerprint_width: int = 16
     evidence_pipeline_fingerprint_height: int = 16
     evidence_pipeline_fingerprint_cycle: int = 6
+    evidence_pipeline_real_fingerprint_enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -370,6 +371,8 @@ class LocalCameraCaptureRunner:
                 "dedup_hamming_threshold": int(cfg.evidence_pipeline_dedup_hamming_threshold),
                 "fingerprint_shape": [int(cfg.evidence_pipeline_fingerprint_width), int(cfg.evidence_pipeline_fingerprint_height)],
                 "fingerprint_cycle": int(cfg.evidence_pipeline_fingerprint_cycle),
+                "real_fingerprint_enabled": bool(cfg.evidence_pipeline_real_fingerprint_enabled),
+                "fingerprint_source": "decoded_keyframe" if cfg.evidence_pipeline_real_fingerprint_enabled else "metadata_synthetic",
                 "facts_only": True,
                 "runs_after_capture_manifest": True,
             },
@@ -714,6 +717,8 @@ class LocalCameraCaptureRunner:
                 "dedup_hamming_threshold": int(cfg.evidence_pipeline_dedup_hamming_threshold),
                 "fingerprint_shape": [int(cfg.evidence_pipeline_fingerprint_width), int(cfg.evidence_pipeline_fingerprint_height)],
                 "fingerprint_cycle": int(cfg.evidence_pipeline_fingerprint_cycle),
+                "real_fingerprint_enabled": bool(cfg.evidence_pipeline_real_fingerprint_enabled),
+                "fingerprint_source": "decoded_keyframe" if cfg.evidence_pipeline_real_fingerprint_enabled else "metadata_synthetic",
                 "facts_only": True,
                 "runs_after_capture_manifest": True,
             },
@@ -848,6 +853,105 @@ class LocalCameraCaptureRunner:
         )
 
 
+
+    def _empty_keyframe_fingerprint(self, source: str) -> dict[str, Any]:
+        return {
+            "fingerprint_source": source,
+            "decoded_width": 0,
+            "decoded_height": 0,
+            "ahash64": "",
+            "dhash64": "",
+            "fingerprint64": "",
+            "histogram16": "",
+        }
+
+    @staticmethod
+    def _rotl64(value: int, shift: int) -> int:
+        value &= 0xFFFFFFFFFFFFFFFF
+        shift &= 63
+        return ((value << shift) | (value >> ((64 - shift) & 63))) & 0xFFFFFFFFFFFFFFFF
+
+    @staticmethod
+    def _histogram16(gray: Any) -> list[int]:
+        import numpy as np  # type: ignore
+
+        values = np.asarray(gray, dtype=np.uint8).reshape(-1)
+        hist = [0 for _ in range(16)]
+        for value in values.tolist():
+            hist[int(value) >> 4] += 1
+        return hist
+
+    @staticmethod
+    def _average_hash64(gray: Any) -> int:
+        import numpy as np  # type: ignore
+
+        arr = np.asarray(gray, dtype=np.uint8)
+        height, width = arr.shape[:2]
+        samples: list[int] = []
+        for sy in range(8):
+            for sx in range(8):
+                x = min(width - 1, (sx * width) // 8)
+                y = min(height - 1, (sy * height) // 8)
+                samples.append(int(arr[y, x]))
+        mean = sum(samples) / 64.0
+        bits = 0
+        for i, value in enumerate(samples):
+            if float(value) >= mean:
+                bits |= 1 << i
+        return bits & 0xFFFFFFFFFFFFFFFF
+
+    @staticmethod
+    def _difference_hash64(gray: Any) -> int:
+        import numpy as np  # type: ignore
+
+        arr = np.asarray(gray, dtype=np.uint8)
+        height, width = arr.shape[:2]
+        bits = 0
+        bit = 0
+        for sy in range(8):
+            y = min(height - 1, (sy * height) // 8)
+            for sx in range(8):
+                x0 = min(width - 1, (sx * width) // 9)
+                x1 = min(width - 1, ((sx + 1) * width) // 9)
+                if int(arr[y, x0]) < int(arr[y, x1]):
+                    bits |= 1 << bit
+                bit += 1
+        return bits & 0xFFFFFFFFFFFFFFFF
+
+    def _decoded_keyframe_fingerprint(self, path: Path) -> dict[str, Any]:
+        """Decode a stored keyframe and emit facts-only media fingerprint columns.
+
+        The evidence pipeline still receives only CSV facts. Decoding happens here
+        after the keyframe has already been written as local capture evidence.
+        """
+
+        if not path.exists():
+            return self._empty_keyframe_fingerprint("decode_unavailable")
+        try:
+            import cv2  # type: ignore
+        except Exception:
+            return self._empty_keyframe_fingerprint("decode_unavailable")
+        image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
+        if image is None:
+            return self._empty_keyframe_fingerprint("decode_unavailable")
+        target_width = max(8, min(128, int(self.config.evidence_pipeline_fingerprint_width)))
+        target_height = max(8, min(128, int(self.config.evidence_pipeline_fingerprint_height)))
+        resized = cv2.resize(image, (target_width, target_height), interpolation=cv2.INTER_AREA)
+        ahash = self._average_hash64(resized)
+        dhash = self._difference_hash64(resized)
+        fingerprint = (ahash ^ self._rotl64(dhash, 17)) & 0xFFFFFFFFFFFFFFFF
+        hist = self._histogram16(resized)
+        return {
+            "fingerprint_source": "decoded_keyframe",
+            "decoded_width": int(image.shape[1]),
+            "decoded_height": int(image.shape[0]),
+            "ahash64": str(ahash),
+            "dhash64": str(dhash),
+            "fingerprint64": str(fingerprint),
+            "histogram16": "|".join(str(v) for v in hist),
+        }
+
+
     def _run_capture_evidence_pipeline(
         self,
         *,
@@ -887,6 +991,13 @@ class LocalCameraCaptureRunner:
                     "audio_score",
                     "lighting_delta",
                     "changed_pixels",
+                    "fingerprint_source",
+                    "decoded_width",
+                    "decoded_height",
+                    "ahash64",
+                    "dhash64",
+                    "fingerprint64",
+                    "histogram16",
                 ],
             )
             writer.writeheader()
@@ -973,6 +1084,9 @@ class LocalCameraCaptureRunner:
                 "binary_path": result.get("binary_path"),
                 "ok": bool(result.get("ok")),
                 "fingerprint_count": evidence.get("fingerprint_count"),
+                "media_fingerprint_count": evidence.get("media_fingerprint_count"),
+                "synthetic_fingerprint_count": evidence.get("synthetic_fingerprint_count"),
+                "real_media_ingestion": evidence.get("real_media_ingestion"),
                 "duplicate_group_count": evidence.get("duplicate_group_count"),
                 "duplicate_clip_count": evidence.get("duplicate_clip_count"),
                 "key_moment_count": evidence.get("key_moment_count"),
@@ -980,7 +1094,7 @@ class LocalCameraCaptureRunner:
                 "safety": safety,
                 "latency": evidence.get("latency"),
                 "facts_only": True,
-                "privacy": {"external_upload": False, "identity": False, "intent": False, "media_decode": False},
+                "privacy": {"external_upload": False, "identity": False, "intent": False, "media_decode": True, "media_decode_scope": "stored_keyframes_only"},
                 "note": "Facts-only capture-run evidence indexing event. It stores storage/fingerprint/dedup/timeline/safety metadata only.",
             },
         )
@@ -993,6 +1107,9 @@ class LocalCameraCaptureRunner:
                 "manifest_artifact_id": csv_artifact_id,
                 "profile_artifact_id": profile_artifact_id,
                 "fingerprint_count": evidence.get("fingerprint_count"),
+                "media_fingerprint_count": evidence.get("media_fingerprint_count"),
+                "synthetic_fingerprint_count": evidence.get("synthetic_fingerprint_count"),
+                "real_media_ingestion": evidence.get("real_media_ingestion"),
                 "duplicate_group_count": evidence.get("duplicate_group_count"),
                 "key_moment_count": evidence.get("key_moment_count"),
                 "safety_ok": safety.get("ok"),
@@ -1038,6 +1155,7 @@ class LocalCameraCaptureRunner:
                     pass
             lighting_delta = round(min(255.0, motion_score + bbox_area * 100.0), 6)
             clip_id = str(item.get("motion_event_id") or item.get("artifact_id") or f"frame_{frame_id}")
+            fingerprint = self._decoded_keyframe_fingerprint(path) if self.config.evidence_pipeline_real_fingerprint_enabled else self._empty_keyframe_fingerprint("metadata_synthetic")
             rows.append(
                 {
                     "clip_id": clip_id,
@@ -1049,6 +1167,7 @@ class LocalCameraCaptureRunner:
                     "audio_score": 0.0,
                     "lighting_delta": lighting_delta,
                     "changed_pixels": changed_pixels,
+                    **fingerprint,
                 }
             )
         return rows

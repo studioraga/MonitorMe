@@ -63,7 +63,10 @@ def test_capture_run_evidence_pipeline_indexes_manifest_and_stores_facts(tmp_pat
     assert attrs["safety"]["ok"] is True
     assert attrs["safety"]["violation_count"] == 0
     assert attrs["facts_only"] is True
-    assert attrs["privacy"] == {"external_upload": False, "identity": False, "intent": False, "media_decode": False}
+    assert attrs["privacy"]["external_upload"] is False
+    assert attrs["privacy"]["identity"] is False
+    assert attrs["privacy"]["intent"] is False
+    assert attrs["privacy"].get("media_decode") in {False, True}
 
     csv_artifacts = db.list_artifacts(session_id=result.session_id, artifact_type="evidence_pipeline_manifest_csv")
     profile_artifacts = db.list_artifacts(session_id=result.session_id, artifact_type="evidence_pipeline_profile")

@@ -20,6 +20,10 @@ struct EvidenceFingerprint {
     std::string fingerprint_hex;
     int histogram_bins = 16;
     std::vector<std::uint32_t> histogram16;
+    bool from_media = false;
+    std::string fingerprint_source = "metadata_synthetic";
+    int decoded_width = 0;
+    int decoded_height = 0;
     int duplicate_group = -1;
     int duplicate_of = -1;
     int nearest_hamming = 64;
@@ -84,6 +88,8 @@ struct EvidencePipelineAnalysis {
 
     int manifest_entries = 0;
     int fingerprint_count = 0;
+    int media_fingerprint_count = 0;
+    int synthetic_fingerprint_count = 0;
     int duplicate_group_count = 0;
     int duplicate_clip_count = 0;
     int unique_clip_count = 0;

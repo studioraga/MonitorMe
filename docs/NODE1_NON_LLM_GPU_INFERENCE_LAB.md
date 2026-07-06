@@ -886,3 +886,59 @@ Validation entry point:
 ```bash
 native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase10_capture_evidence_pipeline_selftest.sh
 ```
+
+## Phase 11 — real media fingerprint ingestion after decoded keyframes
+
+Phase 11 explicitly routes decoded capture-run keyframes into the facts-only evidence pipeline. The Python capture runner performs the decode after the keyframe JPEG has already been stored as local evidence. It computes an average hash, difference hash, combined fingerprint64, decoded dimensions, and a 16-bin luminance histogram. These are written into the evidence CSV manifest and consumed by the native `evidence-pipeline-manifest` mode.
+
+Pipeline view:
+
+```text
+stored keyframe JPEG
+  -> local grayscale decode
+  -> resize to fingerprint_width x fingerprint_height
+  -> ahash64 + dhash64 + fingerprint64 + histogram16
+  -> evidence_pipeline/capture_evidence_manifest.csv
+  -> native evidence-pipeline-manifest
+  -> evidence_pipeline_profile.json
+  -> evidence_pipeline_indexed event
+```
+
+New CSV fields:
+
+```text
+fingerprint_source
+  decoded_keyframe | metadata_synthetic | decode_unavailable
+
+decoded_width, decoded_height
+ahash64, dhash64, fingerprint64
+histogram16     # 16 unsigned integer bins separated by |
+```
+
+Native evidence JSON now includes:
+
+```text
+real_media_ingestion
+media_fingerprint_count
+synthetic_fingerprint_count
+fingerprints[].from_media
+fingerprints[].fingerprint_source
+fingerprints[].decoded_width
+fingerprints[].decoded_height
+```
+
+The safety validator treats decoded-keyframe fingerprints as facts-only workload metadata. It checks that media fingerprints have a valid source, dimensions, hex hash, and 16-bin histogram. No object/person/identity/behavior/intent/suspiciousness claim is emitted.
+
+CLI control:
+
+```bash
+--evidence-pipeline-enabled
+--evidence-pipeline-no-real-fingerprints   # fallback to manifest-metadata synthetic fingerprints
+```
+
+Validation:
+
+```bash
+native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase11_real_media_fingerprint_selftest.sh
+python -m pytest -q tests/test_node1_capture_real_fingerprint_phase11.py
+```

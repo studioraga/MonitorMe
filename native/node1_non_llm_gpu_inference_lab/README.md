@@ -530,3 +530,19 @@ The selftest builds the CPU native binary, runs the native selftest binary, then
 ```text
 node1_non_llm_gpu_lab Phase 10 Capture-run Evidence Pipeline selftest PASS
 ```
+
+## Phase 11 — real media fingerprint ingestion
+
+The native evidence pipeline can now consume manifest rows with precomputed decoded-keyframe fingerprints. The Python capture runner writes these columns after locally decoding stored JPEG keyframes:
+
+```text
+fingerprint_source,decoded_width,decoded_height,ahash64,dhash64,fingerprint64,histogram16
+```
+
+Rows with `fingerprint_source=decoded_keyframe`, positive decoded dimensions, and a 16-bin histogram are treated as real media fingerprints. Native JSON reports `real_media_ingestion`, `media_fingerprint_count`, `synthetic_fingerprint_count`, and per-fingerprint `from_media` facts. Rows without valid media fingerprint columns continue to use deterministic metadata-synthetic fingerprints.
+
+Selftest:
+
+```bash
+./scripts/run_node1_gpu_lab_phase11_real_media_fingerprint_selftest.sh
+```

@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <fstream>
 #include <limits>
+#include <map>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -41,6 +42,67 @@ std::vector<std::string> split_csv_simple(const std::string& line) {
 
 bool is_header_line(const std::vector<std::string>& fields) {
     return !fields.empty() && fields[0] == "clip_id";
+}
+
+std::string lower_copy(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return value;
+}
+
+std::map<std::string, std::size_t> header_index(const std::vector<std::string>& header) {
+    std::map<std::string, std::size_t> out;
+    for (std::size_t i = 0; i < header.size(); ++i) {
+        out[lower_copy(trim_copy(header[i]))] = i;
+    }
+    return out;
+}
+
+std::string get_field(
+    const std::vector<std::string>& fields,
+    const std::map<std::string, std::size_t>& index,
+    const std::string& name,
+    const std::string& fallback = "") {
+    const auto it = index.find(name);
+    if (it == index.end() || it->second >= fields.size()) {
+        return fallback;
+    }
+    return fields[it->second];
+}
+
+bool has_field(
+    const std::vector<std::string>& fields,
+    const std::map<std::string, std::size_t>& index,
+    const std::string& name) {
+    const auto it = index.find(name);
+    return it != index.end() && it->second < fields.size() && !trim_copy(fields[it->second]).empty();
+}
+
+std::uint64_t parse_u64_flexible(const std::string& text) {
+    const std::string value = trim_copy(text);
+    if (value.empty()) return 0;
+    std::size_t consumed = 0;
+    const int base = (value.rfind("0x", 0) == 0 || value.rfind("0X", 0) == 0) ? 16 : 10;
+    const auto parsed = std::stoull(value, &consumed, base);
+    if (consumed != value.size()) {
+        throw std::runtime_error("invalid uint64 value: " + value);
+    }
+    return static_cast<std::uint64_t>(parsed);
+}
+
+std::vector<std::uint32_t> parse_histogram16(const std::string& text) {
+    std::vector<std::uint32_t> hist;
+    std::string cleaned = text;
+    for (char& c : cleaned) {
+        if (c == '|' || c == ';') c = ',';
+    }
+    std::stringstream ss(cleaned);
+    std::string field;
+    while (std::getline(ss, field, ',')) {
+        const auto trimmed = trim_copy(field);
+        if (trimmed.empty()) continue;
+        hist.push_back(static_cast<std::uint32_t>(std::stoul(trimmed)));
+    }
+    return hist;
 }
 
 double clamp01(double value) {
@@ -189,6 +251,8 @@ std::vector<StorageManifestEntry> scan_storage_manifest_csv(const std::string& p
     std::vector<StorageManifestEntry> out;
     std::string line;
     int line_no = 0;
+    std::map<std::string, std::size_t> header;
+    bool saw_header = false;
     while (std::getline(f, line)) {
         ++line_no;
         const std::string trimmed = trim_copy(line);
@@ -197,21 +261,64 @@ std::vector<StorageManifestEntry> scan_storage_manifest_csv(const std::string& p
         }
         const auto fields = split_csv_simple(trimmed);
         if (is_header_line(fields)) {
+            header = header_index(fields);
+            saw_header = true;
             continue;
         }
-        if (fields.size() != 9) {
-            throw std::runtime_error("storage manifest line " + std::to_string(line_no) + " must have 9 CSV fields");
-        }
+
         StorageManifestEntry e;
-        e.clip_id = fields[0];
-        e.path = fields[1];
-        e.start_ms = static_cast<std::uint64_t>(std::stoull(fields[2]));
-        e.duration_ms = static_cast<std::uint64_t>(std::stoull(fields[3]));
-        e.bytes = static_cast<std::uint64_t>(std::stoull(fields[4]));
-        e.motion_score = std::stod(fields[5]);
-        e.audio_score = std::stod(fields[6]);
-        e.lighting_delta = std::stod(fields[7]);
-        e.changed_pixels = static_cast<std::uint64_t>(std::stoull(fields[8]));
+        if (saw_header) {
+            const auto required = {"clip_id", "path", "start_ms", "duration_ms", "bytes", "motion_score", "audio_score", "lighting_delta", "changed_pixels"};
+            for (const auto* name : required) {
+                if (!has_field(fields, header, name)) {
+                    throw std::runtime_error("storage manifest line " + std::to_string(line_no) + " is missing required column: " + std::string(name));
+                }
+            }
+            e.clip_id = get_field(fields, header, "clip_id");
+            e.path = get_field(fields, header, "path");
+            e.start_ms = parse_u64_flexible(get_field(fields, header, "start_ms"));
+            e.duration_ms = parse_u64_flexible(get_field(fields, header, "duration_ms"));
+            e.bytes = parse_u64_flexible(get_field(fields, header, "bytes"));
+            e.motion_score = std::stod(get_field(fields, header, "motion_score"));
+            e.audio_score = std::stod(get_field(fields, header, "audio_score"));
+            e.lighting_delta = std::stod(get_field(fields, header, "lighting_delta"));
+            e.changed_pixels = parse_u64_flexible(get_field(fields, header, "changed_pixels"));
+
+            e.fingerprint_source = get_field(fields, header, "fingerprint_source", "metadata_synthetic");
+            if (has_field(fields, header, "decoded_width")) {
+                e.decoded_width = static_cast<int>(parse_u64_flexible(get_field(fields, header, "decoded_width")));
+            }
+            if (has_field(fields, header, "decoded_height")) {
+                e.decoded_height = static_cast<int>(parse_u64_flexible(get_field(fields, header, "decoded_height")));
+            }
+            const bool has_real_fingerprint_cols = has_field(fields, header, "ahash64")
+                && has_field(fields, header, "dhash64")
+                && has_field(fields, header, "fingerprint64")
+                && has_field(fields, header, "histogram16");
+            if (has_real_fingerprint_cols) {
+                e.media_ahash64 = parse_u64_flexible(get_field(fields, header, "ahash64"));
+                e.media_dhash64 = parse_u64_flexible(get_field(fields, header, "dhash64"));
+                e.media_fingerprint64 = parse_u64_flexible(get_field(fields, header, "fingerprint64"));
+                e.media_histogram16 = parse_histogram16(get_field(fields, header, "histogram16"));
+                e.has_media_fingerprint = e.media_histogram16.size() == 16
+                    && e.decoded_width > 0
+                    && e.decoded_height > 0
+                    && e.fingerprint_source == "decoded_keyframe";
+            }
+        } else {
+            if (fields.size() != 9) {
+                throw std::runtime_error("storage manifest line " + std::to_string(line_no) + " must have 9 CSV fields");
+            }
+            e.clip_id = fields[0];
+            e.path = fields[1];
+            e.start_ms = static_cast<std::uint64_t>(std::stoull(fields[2]));
+            e.duration_ms = static_cast<std::uint64_t>(std::stoull(fields[3]));
+            e.bytes = static_cast<std::uint64_t>(std::stoull(fields[4]));
+            e.motion_score = std::stod(fields[5]);
+            e.audio_score = std::stod(fields[6]);
+            e.lighting_delta = std::stod(fields[7]);
+            e.changed_pixels = static_cast<std::uint64_t>(std::stoull(fields[8]));
+        }
         e.active_tiles = static_cast<int>(std::min<std::uint64_t>(32ULL, e.changed_pixels / 2400ULL + 1ULL));
         e.priority_score = compute_priority_score(e);
         out.push_back(e);

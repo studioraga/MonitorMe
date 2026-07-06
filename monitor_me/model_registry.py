@@ -78,10 +78,11 @@ DEFAULT_MODELS = [
         provider="cpp-cpu-sidecar",
         enabled=False,
         metadata={
-            "stage": "capture-run-evidence-pipeline-integration",
-            "privacy": "Disabled by default; indexes local capture-run keyframe evidence into facts-only storage/fingerprint/dedup metadata.",
+            "stage": "capture-run-real-media-fingerprint-ingestion",
+            "privacy": "Disabled by default; decodes stored local keyframes only to compute facts-only fingerprints and evidence metadata.",
             "facts_only": True,
-            "media_decode": False,
+            "media_decode": True,
+            "media_decode_scope": "stored_keyframes_only",
         },
     ),
     ModelRecord(

@@ -127,13 +127,33 @@ EvidenceFingerprint make_fingerprint(
     int clip_index,
     const EvidencePipelineConfig& cfg) {
 
-    const auto pixels = make_visual_workload_tile(entry, clip_index, cfg);
     EvidenceFingerprint fp;
     fp.clip_index = clip_index;
     fp.clip_id = entry.clip_id;
     fp.start_ms = entry.start_ms;
     fp.duration_ms = entry.duration_ms;
     fp.histogram_bins = 16;
+
+    if (entry.has_media_fingerprint) {
+        fp.from_media = true;
+        fp.fingerprint_source = entry.fingerprint_source;
+        fp.decoded_width = entry.decoded_width;
+        fp.decoded_height = entry.decoded_height;
+        fp.histogram16 = entry.media_histogram16;
+        fp.ahash64 = entry.media_ahash64;
+        fp.dhash64 = entry.media_dhash64;
+        fp.fingerprint64 = entry.media_fingerprint64;
+        fp.fingerprint_hex = hex64(fp.fingerprint64);
+        const std::uint64_t hist_energy = std::accumulate(fp.histogram16.begin(), fp.histogram16.end(), std::uint64_t{0});
+        fp.fingerprint_score = static_cast<double>(hist_energy) / static_cast<double>(std::max<std::uint64_t>(1ULL, hist_energy));
+        return fp;
+    }
+
+    const auto pixels = make_visual_workload_tile(entry, clip_index, cfg);
+    fp.from_media = false;
+    fp.fingerprint_source = "metadata_synthetic";
+    fp.decoded_width = cfg.fingerprint_width;
+    fp.decoded_height = cfg.fingerprint_height;
     fp.histogram16 = histogram16(pixels);
     fp.ahash64 = average_hash64(pixels, cfg.fingerprint_width, cfg.fingerprint_height);
     fp.dhash64 = difference_hash64(pixels, cfg.fingerprint_width, cfg.fingerprint_height);
@@ -344,9 +364,13 @@ EvidenceSafetyValidation validate_evidence_safety(
     if (!s.batch_plan_ok) add_violation(s, "batch_plan_constraints_failed");
 
     ++s.checks_count;
-    s.fingerprint_ok = out.fingerprint_count == out.manifest_entries;
+    s.fingerprint_ok = out.fingerprint_count == out.manifest_entries
+        && out.media_fingerprint_count + out.synthetic_fingerprint_count == out.fingerprint_count;
     for (const auto& fp : out.fingerprints) {
         if (fp.histogram16.size() != 16 || fp.fingerprint_hex.size() != 18) {
+            s.fingerprint_ok = false;
+        }
+        if (fp.from_media && (fp.fingerprint_source != "decoded_keyframe" || fp.decoded_width <= 0 || fp.decoded_height <= 0)) {
             s.fingerprint_ok = false;
         }
     }
@@ -455,6 +479,13 @@ EvidencePipelineAnalysis analyze_evidence_pipeline_cpu(
         out.fingerprints.push_back(make_fingerprint(out.storage_batch.manifest[i], static_cast<int>(i), cfg));
     }
     out.fingerprint_count = static_cast<int>(out.fingerprints.size());
+    for (const auto& fp : out.fingerprints) {
+        if (fp.from_media) {
+            ++out.media_fingerprint_count;
+        } else {
+            ++out.synthetic_fingerprint_count;
+        }
+    }
     out.latency.fingerprint_ms = fingerprint_timer.elapsed_ms();
 
     HostStageTimer dedup_timer;

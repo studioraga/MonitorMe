@@ -20,6 +20,19 @@ struct StorageManifestEntry {
     std::uint64_t changed_pixels = 0;
     int active_tiles = 0;
     double priority_score = 0.0;
+
+    // Phase 11: optional real media fingerprint facts. These are populated by
+    // Python after decoded keyframes are explicitly routed into the evidence
+    // pipeline. Native code consumes them as facts-only workload metadata and
+    // falls back to deterministic synthetic fingerprints when absent.
+    bool has_media_fingerprint = false;
+    std::uint64_t media_ahash64 = 0;
+    std::uint64_t media_dhash64 = 0;
+    std::uint64_t media_fingerprint64 = 0;
+    std::vector<std::uint32_t> media_histogram16;
+    int decoded_width = 0;
+    int decoded_height = 0;
+    std::string fingerprint_source = "metadata_synthetic";
 };
 
 struct StorageBatchReadPlan {

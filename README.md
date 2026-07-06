@@ -967,3 +967,35 @@ Generated artifacts include:
 - `evidence_pipeline_profile`
 
 The final capture manifest records `evidence_pipeline_event_ids`, `evidence_pipeline_artifact_ids`, and a compact `evidence_pipeline.last_result` summary.
+
+### Phase 11: real media fingerprint ingestion after decoded keyframes
+
+Phase 11 upgrades the capture-run evidence pipeline from manifest-only synthetic workload fingerprints to explicit decoded-keyframe fingerprint ingestion. When `--evidence-pipeline-enabled` is used, stored local JPEG keyframes are decoded after capture, resized to the configured fingerprint shape, and converted into facts-only fingerprint columns in `evidence_pipeline/capture_evidence_manifest.csv`.
+
+The evidence CSV now includes optional real media fingerprint columns:
+
+```text
+fingerprint_source,decoded_width,decoded_height,ahash64,dhash64,fingerprint64,histogram16
+```
+
+The native evidence pipeline consumes those precomputed values in `evidence-pipeline-manifest` mode. It reports `real_media_ingestion=true`, `media_fingerprint_count`, `synthetic_fingerprint_count`, and per-fingerprint `from_media` / `fingerprint_source` facts. If real decode is disabled or unavailable, it falls back to the existing manifest-metadata synthetic fingerprint path.
+
+Real fingerprint decoding is local-only and limited to already-stored keyframes. It does not upload frames, identify people, infer intent, decode speech, or emit semantic visual/audio claims.
+
+Disable real keyframe decoding while keeping evidence indexing enabled:
+
+```bash
+python -m monitor_me.cli capture-run \
+  --camera-id c922_node1_gate \
+  --device /dev/video0 \
+  --duration-sec 10 \
+  --evidence-pipeline-enabled \
+  --evidence-pipeline-no-real-fingerprints
+```
+
+Validate Phase 11:
+
+```bash
+native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase11_real_media_fingerprint_selftest.sh
+python -m pytest -q tests/test_node1_capture_real_fingerprint_phase11.py
+```
