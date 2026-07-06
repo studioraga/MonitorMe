@@ -1123,3 +1123,44 @@ Validate Phase 14:
 native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase14_evidence_retention_selftest.sh
 python -m pytest -q tests/test_node1_evidence_retention_phase14.py
 ```
+
+---
+
+## Phase 15 — Operator dashboard / UI integration
+
+MonitorMe now includes a local read-only operator dashboard for the persisted evidence pipeline index.
+
+Start the local API, then open:
+
+```text
+http://127.0.0.1:8088/operator/dashboard
+```
+
+JSON context:
+
+```text
+GET /operator/dashboard/data
+```
+
+The dashboard summarizes local facts only:
+
+```text
+evidence profiles
+media vs synthetic fingerprint counts
+key moments
+dedup groups
+safety validator status
+latency/throughput facts
+retention run audit records
+```
+
+Safety boundaries:
+
+```text
+no external upload
+no raw frame upload
+no API-time media decode
+no external web assets
+no identity / intent / speech-content claims
+no destructive retention action from the dashboard
+```

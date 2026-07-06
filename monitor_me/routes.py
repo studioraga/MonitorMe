@@ -15,6 +15,7 @@ from .vlm_client import qwen_vlm_health
 from .short_clip_vlm import ShortClipVLMExperimentService
 from .smolvlm2_client import smolvlm2_health
 from .model_registry import register_default_models
+from .operator_dashboard import build_operator_dashboard_context, render_operator_dashboard_html
 from .report_tools import IncidentReportBuilder
 from .tracker_tools import TrackerTools
 
@@ -27,6 +28,7 @@ def create_app(db_path: str | None = None):
     """
     try:
         from fastapi import Body, FastAPI, HTTPException
+        from fastapi.responses import HTMLResponse
         from pydantic import BaseModel, Field
     except Exception as exc:  # pragma: no cover - covered by optional deployment
         raise RuntimeError("FastAPI is optional. Install with: pip install -e .[api]") from exc
@@ -113,6 +115,8 @@ def create_app(db_path: str | None = None):
                 "evidence_pipeline_retention_plan": "GET /evidence/pipeline/retention/plan",
                 "evidence_pipeline_retention_apply": "POST /evidence/pipeline/retention/apply",
                 "evidence_pipeline_retention_runs": "GET /evidence/pipeline/retention/runs",
+                "operator_dashboard": "GET /operator/dashboard",
+                "operator_dashboard_data": "GET /operator/dashboard/data",
                 "ask": "POST /assistant/ask",
                 "assistant_summary": "POST /assistant/events/{event_id}/summary",
                 "assistant_summaries": "GET /assistant/summaries",
@@ -150,8 +154,51 @@ def create_app(db_path: str | None = None):
                 "evidence_pipeline_api_external_upload": False,
                 "evidence_index_retention_rows_only": True,
                 "evidence_index_retention_deletes_media": False,
+                "operator_dashboard_enabled": True,
+                "operator_dashboard_external_assets": False,
+                "operator_dashboard_media_decode": False,
+                "operator_dashboard_destructive_actions": False,
             },
         }
+
+    @app.get("/operator/dashboard", response_class=HTMLResponse)
+    def operator_dashboard(
+        session_id: str | None = None,
+        camera_id: str | None = None,
+        profile_id: str | None = None,
+        limit: int = 10,
+        fingerprint_limit: int = 5,
+        retention_limit: int = 5,
+    ) -> HTMLResponse:
+        context = build_operator_dashboard_context(
+            db,
+            session_id=session_id,
+            camera_id=camera_id,
+            profile_id=profile_id,
+            limit=limit,
+            fingerprint_limit=fingerprint_limit,
+            retention_limit=retention_limit,
+        )
+        return HTMLResponse(render_operator_dashboard_html(context))
+
+    @app.get("/operator/dashboard/data")
+    def operator_dashboard_data(
+        session_id: str | None = None,
+        camera_id: str | None = None,
+        profile_id: str | None = None,
+        limit: int = 10,
+        fingerprint_limit: int = 5,
+        retention_limit: int = 5,
+    ) -> dict[str, Any]:
+        return build_operator_dashboard_context(
+            db,
+            session_id=session_id,
+            camera_id=camera_id,
+            profile_id=profile_id,
+            limit=limit,
+            fingerprint_limit=fingerprint_limit,
+            retention_limit=retention_limit,
+        )
 
     @app.get("/health")
     def health() -> dict[str, Any]:

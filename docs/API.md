@@ -271,3 +271,59 @@ curl -sS 'http://127.0.0.1:8088/evidence/pipeline/retention/runs?limit=20' \
 ```
 
 The response records whether source events, capture artifacts, and keyframe files are retained. Retention is facts-only and does not perform media decode in the API request path.
+
+---
+
+## Phase 15 — Operator dashboard / UI integration
+
+Phase 15 exposes a read-only local operator dashboard over the persisted evidence index and evidence API routes.
+
+```text
+GET /operator/dashboard
+GET /operator/dashboard/data
+```
+
+The HTML dashboard shows local facts only:
+
+```text
+profile/session/camera references
+fingerprint totals and media/synthetic split
+key moment counts and ranked key-moment table
+dedup group counts and duplicate-accounting table
+safety validator status
+latency/throughput facts
+retention run audit history
+links to JSON evidence API endpoints
+```
+
+The dashboard is intentionally read-only. It does not execute destructive retention apply operations. Use the dedicated retention API/CLI controls for retention planning and apply workflows.
+
+Safety contract:
+
+```text
+external_upload=false
+raw_frame_upload=false
+media_decode_in_dashboard=false
+media_decode_in_api=false
+semantic_claims=false
+facts_only=true
+identity=false
+intent=false
+speech_content=false
+destructive_actions_from_dashboard=false
+```
+
+Example:
+
+```bash
+curl -sS 'http://127.0.0.1:8088/operator/dashboard/data?session_id=<session_id>&limit=10&fingerprint_limit=5' \
+  | python3 -m json.tool
+```
+
+Open the UI locally:
+
+```text
+http://127.0.0.1:8088/operator/dashboard
+```
+
+The HTML page has no external assets and reads only the local SQLite evidence index through the in-process API handler.

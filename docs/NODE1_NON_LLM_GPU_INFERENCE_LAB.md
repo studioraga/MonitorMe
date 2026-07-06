@@ -1061,3 +1061,39 @@ native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase14_evidenc
 python -m compileall -q monitor_me tests
 python -m pytest -q tests/test_node1_evidence_retention_phase14.py
 ```
+
+---
+
+## Phase 15 — Operator dashboard / UI integration
+
+Phase 15 adds a local read-only operator dashboard for the evidence pipeline index created in Phases 12–14.
+
+```text
+persisted evidence index
+  -> evidence API summary helpers
+  -> /operator/dashboard/data JSON context
+  -> /operator/dashboard local HTML view
+```
+
+The dashboard gives an operator a quick local view of:
+
+```text
+evidence profile counts
+media fingerprint counts
+synthetic fingerprint counts
+dedup groups and duplicate clip counts
+ranked key moments
+safety validator status
+latency and throughput facts
+retention dry-run/apply audit history
+links to JSON evidence summary endpoints
+```
+
+The dashboard is facts-only and local-only. It does not decode media during the request, does not upload frames, does not fetch external assets, does not infer identity or intent, and does not expose destructive retention apply controls from the page.
+
+Validation:
+
+```bash
+native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase15_operator_dashboard_selftest.sh
+python -m pytest -q tests/test_node1_operator_dashboard_phase15.py
+```

@@ -616,3 +616,22 @@ Expected:
 node1_non_llm_gpu_lab_selftest PASS
 node1_non_llm_gpu_lab Phase 14 Evidence Index Retention selftest PASS
 ```
+
+---
+
+## Phase 15 — Operator dashboard / UI integration
+
+Phase 15 adds a local operator dashboard over the persisted evidence pipeline index.
+
+```text
+GET /operator/dashboard       -> read-only HTML UI
+GET /operator/dashboard/data  -> JSON model used by the UI/tests
+```
+
+The dashboard is local-only and facts-only. It reads SQLite evidence-index rows and retention-run audit rows. It does not decode media, upload frames, fetch external web assets, run VLM/LLM analysis, infer identity/intent, or execute destructive retention actions.
+
+Selftest:
+
+```bash
+./scripts/run_node1_gpu_lab_phase15_operator_dashboard_selftest.sh
+```
