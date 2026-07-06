@@ -699,3 +699,72 @@ Selftest:
 The integration exports `/operator/dashboard/metrics` and a Grafana dashboard
 model at `/operator/dashboard/grafana/dashboard.json`. Both are generated from
 persisted SQLite evidence-index rows and audit rows only.
+
+## Phase 20 — Nsight Compute profiling pass
+
+Phase 20 adds a reproducible Nsight Compute profiling pass for the CUDA-backed
+Node1 non-LLM GPU lab kernels from Phases 2 through 7. The profiling pass is
+synthetic-input only and is intended to run locally on Node1 with CUDA 13.3,
+RTX 5060 Ti / `sm_120`, and Nsight Compute installed.
+
+The profile plan is stored in:
+
+```text
+configs/nsight_compute/node1_gpu_lab_phase20_profile_plan.json
+```
+
+Representative workloads:
+
+```text
+isp_sobel_mag      Phase 2 ISP Sobel magnitude CUDA path
+sparse_roi         Phase 3 sparse ROI crop/resize/normalize CUDA path
+mixed_region       Phase 4 grouped mixed-region CUDA path
+dense_full_frame   Phase 5 full-frame diff/histogram/reduction CUDA path
+overlay_heavy      Phase 6 overlay/heatmap/thumbnail CUDA path
+audiobox           Phase 7 AudioBox RMS/peak/onset/sync CUDA path
+```
+
+CI-safe dry-run validation:
+
+```bash
+native/node1_non_llm_gpu_inference_lab/scripts/profile_node1_gpu_lab_nsight_compute.sh \
+  --dry-run \
+  --workload dense_full_frame \
+  --output-dir results/node1_gpu_lab/nsight_compute/phase20_dry_run
+```
+
+Actual Node1 profiling pass:
+
+```bash
+source ~/.config/cuda-13.3.env
+native/node1_non_llm_gpu_inference_lab/scripts/profile_node1_gpu_lab_nsight_compute.sh \
+  --execute \
+  --output-dir results/node1_gpu_lab/nsight_compute/phase20_$(date +%Y%m%d_%H%M%S)
+```
+
+The script builds the CUDA binary with:
+
+```text
+-DNODE1_NON_LLM_ENABLE_CUDA=ON
+-DCMAKE_CUDA_ARCHITECTURES=120
+```
+
+For every selected workload it writes:
+
+```text
+<workload>.baseline.json
+<workload>.ncu-rep
+<workload>.ncu.txt
+phase20_nsight_compute_manifest.json
+```
+
+The generated profiler reports live under `results/` and must not be staged into
+git. The workflow does not decode media, read retained keyframe pixels, upload
+raw frames, call external services, infer identity, infer intent, inspect speech
+content, emit semantic claims, or execute destructive actions.
+
+Validate the Phase 20 dry-run/selftest path:
+
+```bash
+./native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase20_nsight_compute_selftest.sh
+```

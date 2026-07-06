@@ -1,0 +1,62 @@
+{
+  "schema": "monitorme.node1_nsight_compute_profile_plan.v0.1",
+  "phase": 20,
+  "name": "node1_non_llm_gpu_lab_nsight_compute_pass",
+  "description": "Representative Nsight Compute profiling workloads for the local Node1 non-LLM GPU inference lab.",
+  "default_ncu_set": "full",
+  "default_cuda_arch": "120",
+  "default_output_dir": "results/node1_gpu_lab/nsight_compute",
+  "safety": {
+    "synthetic_inputs_only": true,
+    "facts_only": true,
+    "external_upload": false,
+    "raw_frame_upload": false,
+    "media_decode": false,
+    "semantic_claims": false,
+    "destructive_actions": false
+  },
+  "workloads": [
+    {
+      "name": "isp_sobel_mag",
+      "title": "ISP Sobel magnitude CUDA path",
+      "phase_origin": "phase2_isp_cuda",
+      "description": "Profiles the tiled ISP Sobel magnitude CUDA path over a synthetic frame.",
+      "args": ["--mode", "isp-synthetic", "--scenario", "mixed", "--width", "640", "--height", "480", "--isp-filter", "sobel-mag", "--gpu"]
+    },
+    {
+      "name": "sparse_roi",
+      "title": "Sparse ROI crop/resize/normalize CUDA path",
+      "phase_origin": "phase3_sparse_roi",
+      "description": "Profiles sparse active-tile ROI extraction and normalize over synthetic sparse motion.",
+      "args": ["--mode", "sparse-roi-synthetic", "--scenario", "sparse", "--width", "640", "--height", "480", "--target-width", "32", "--target-height", "32", "--max-rois", "8", "--gpu"]
+    },
+    {
+      "name": "mixed_region",
+      "title": "Mixed-region grouped crop CUDA path",
+      "phase_origin": "phase4_mixed_region",
+      "description": "Profiles connected-component grouping and batched crop/resize/normalize for mixed regions.",
+      "args": ["--mode", "mixed-region-synthetic", "--scenario", "mixed", "--width", "640", "--height", "480", "--target-width", "32", "--target-height", "32", "--max-groups", "8", "--gpu"]
+    },
+    {
+      "name": "dense_full_frame",
+      "title": "Dense full-frame diff/histogram/reduction CUDA path",
+      "phase_origin": "phase5_dense_full_frame",
+      "description": "Profiles dense full-frame diff, histogram, reduction, lighting delta, and normalize kernels.",
+      "args": ["--mode", "dense-full-frame-synthetic", "--scenario", "dense", "--width", "640", "--height", "480", "--gpu"]
+    },
+    {
+      "name": "overlay_heavy",
+      "title": "Overlay heatmap/thumbnail CUDA path",
+      "phase_origin": "phase6_overlay_heavy",
+      "description": "Profiles overlay alpha blend, motion heatmap, and thumbnail generation kernels.",
+      "args": ["--mode", "overlay-heavy-synthetic", "--scenario", "mixed", "--width", "640", "--height", "480", "--thumbnail-width", "80", "--thumbnail-height", "45", "--gpu"]
+    },
+    {
+      "name": "audiobox",
+      "title": "AudioBox RMS/peak/onset/sync CUDA path",
+      "phase_origin": "phase7_audiobox",
+      "description": "Profiles synthetic audio RMS, peak, onset, and sync-drift CUDA kernels.",
+      "args": ["--mode", "audiobox-synthetic", "--audio-samples", "65536", "--audio-window-samples", "1024", "--sample-rate", "48000", "--sync-drift-samples", "17", "--max-lag", "64", "--gpu"]
+    }
+  ]
+}

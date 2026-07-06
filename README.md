@@ -1324,3 +1324,36 @@ Validation:
 ./native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase19_grafana_dashboard_selftest.sh
 python -m pytest -q tests/test_node1_operator_dashboard_grafana_phase19.py
 ```
+
+### Node1 non-LLM GPU lab Phase 20: Nsight Compute profiling pass
+
+Phase 20 adds a reproducible Nsight Compute profiling pass for representative
+CUDA workloads in the Node1 non-LLM GPU lab. It is a local developer/operator
+workflow, not an API inference path.
+
+Dry-run the exact profiling command plan without needing a GPU or Nsight
+Compute:
+
+```bash
+native/node1_non_llm_gpu_inference_lab/scripts/profile_node1_gpu_lab_nsight_compute.sh --dry-run
+```
+
+Run the real profiler pass on Node1:
+
+```bash
+source ~/.config/cuda-13.3.env
+native/node1_non_llm_gpu_inference_lab/scripts/profile_node1_gpu_lab_nsight_compute.sh \
+  --execute \
+  --output-dir results/node1_gpu_lab/nsight_compute/phase20_$(date +%Y%m%d_%H%M%S)
+```
+
+Validate the Phase 20 dry-run/selftest path:
+
+```bash
+./native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase20_nsight_compute_selftest.sh
+```
+
+The profiling plan is facts-only and synthetic-input only. It does not decode
+media, upload raw frames, call external services, infer identity, infer intent,
+inspect speech content, or emit semantic claims. Profiler reports are runtime
+artifacts under `results/` and must not be staged into git.

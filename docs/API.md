@@ -466,3 +466,33 @@ curl -sS http://127.0.0.1:8088/operator/dashboard/grafana/dashboard.json | pytho
 
 Static deployment snippets are available under `configs/prometheus` and
 `configs/grafana`.
+
+## Phase 20 — Nsight Compute profiling pass
+
+Phase 20 does not add a public API route. It adds a local native profiling
+workflow for Node1 CUDA kernels and keeps profiler output out of the API and out
+of git.
+
+Primary files:
+
+```text
+configs/nsight_compute/node1_gpu_lab_phase20_profile_plan.json
+native/node1_non_llm_gpu_inference_lab/scripts/profile_node1_gpu_lab_nsight_compute.py
+native/node1_non_llm_gpu_inference_lab/scripts/profile_node1_gpu_lab_nsight_compute.sh
+native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase20_nsight_compute_selftest.sh
+```
+
+Dry-run:
+
+```bash
+native/node1_non_llm_gpu_inference_lab/scripts/profile_node1_gpu_lab_nsight_compute.sh --dry-run
+```
+
+Execute on Node1 with CUDA/Nsight Compute:
+
+```bash
+native/node1_non_llm_gpu_inference_lab/scripts/profile_node1_gpu_lab_nsight_compute.sh --execute
+```
+
+The generated `.ncu-rep`, `.ncu.txt`, baseline JSON, and manifest files are local
+runtime artifacts under `results/` and should not be committed.

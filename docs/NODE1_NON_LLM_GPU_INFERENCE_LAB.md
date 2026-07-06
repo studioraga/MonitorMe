@@ -1227,3 +1227,68 @@ Validation:
 ./native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase19_grafana_dashboard_selftest.sh
 python -m pytest -q tests/test_node1_operator_dashboard_grafana_phase19.py
 ```
+
+## Phase 20 — Nsight Compute profiling pass
+
+Phase 20 adds a reproducible Nsight Compute profiling workflow for the CUDA
+kernels developed earlier in the Node1 non-LLM GPU lab. It is intentionally
+separate from the evidence API and dashboard paths: it profiles only synthetic
+native workloads and writes local profiler reports under `results/`.
+
+```text
+Phase 2–7 CUDA kernels
+        │
+        ▼
+configs/nsight_compute/node1_gpu_lab_phase20_profile_plan.json
+        │
+        ▼
+profile_node1_gpu_lab_nsight_compute.sh --execute
+        │
+        ├── baseline JSON per workload
+        ├── .ncu-rep per workload
+        ├── .ncu.txt per workload
+        └── phase20_nsight_compute_manifest.json
+```
+
+The plan covers:
+
+```text
+isp_sobel_mag
+sparse_roi
+mixed_region
+dense_full_frame
+overlay_heavy
+audiobox
+```
+
+Dry-run command construction, safe for CPU-only CI:
+
+```bash
+native/node1_non_llm_gpu_inference_lab/scripts/profile_node1_gpu_lab_nsight_compute.sh \
+  --dry-run \
+  --workload dense_full_frame
+```
+
+Real Node1 Nsight Compute pass:
+
+```bash
+source ~/.config/cuda-13.3.env
+native/node1_non_llm_gpu_inference_lab/scripts/profile_node1_gpu_lab_nsight_compute.sh \
+  --execute \
+  --output-dir results/node1_gpu_lab/nsight_compute/phase20_$(date +%Y%m%d_%H%M%S)
+```
+
+Safety and scope:
+
+```text
+synthetic_inputs_only=true
+facts_only=true
+external_upload=false
+raw_frame_upload=false
+media_decode=false
+semantic_claims=false
+destructive_actions=false
+```
+
+The profiler output is intentionally local runtime output. Do not stage
+`results/node1_gpu_lab/nsight_compute/` into git.
