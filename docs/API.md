@@ -419,3 +419,50 @@ Important fields:
 `GET /operator/dashboard` renders those facts as local inline HTML/CSS/SVG
 charts. It does not load remote chart libraries, make browser-side API calls to
 external services, decode media, or expose destructive retention/rebuild actions.
+
+## Phase 19 — Grafana / Prometheus operator dashboard integration
+
+Phase 19 adds local observability endpoints for the facts-only operator
+dashboard.
+
+### `GET /operator/dashboard/metrics`
+
+Returns Prometheus text exposition built from the same dashboard context as
+`/operator/dashboard/data`.
+
+The metrics are a projection of persisted SQLite evidence-index rows and audit
+rows. The request path does not read image pixels, decode media, run native
+analysis, call external services, upload frames, or emit semantic claims.
+
+Example:
+
+```bash
+curl -sS 'http://127.0.0.1:8088/operator/dashboard/metrics?limit=10&fingerprint_limit=5'
+```
+
+Example metric families:
+
+```text
+monitorme_operator_profile_count
+monitorme_operator_fingerprint_count
+monitorme_operator_key_moment_count
+monitorme_operator_profile_fingerprints
+monitorme_operator_latency_breakdown_ms
+monitorme_operator_operation_audit_runs
+monitorme_operator_safety_check_ok
+monitorme_operator_privacy_flag
+```
+
+### `GET /operator/dashboard/grafana/dashboard.json`
+
+Returns a Grafana dashboard envelope containing a dashboard model that expects a
+Prometheus datasource scraping `/operator/dashboard/metrics`.
+
+Example:
+
+```bash
+curl -sS http://127.0.0.1:8088/operator/dashboard/grafana/dashboard.json | python3 -m json.tool
+```
+
+Static deployment snippets are available under `configs/prometheus` and
+`configs/grafana`.

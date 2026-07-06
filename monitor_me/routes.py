@@ -16,6 +16,7 @@ from .short_clip_vlm import ShortClipVLMExperimentService
 from .smolvlm2_client import smolvlm2_health
 from .model_registry import register_default_models
 from .operator_dashboard import build_operator_dashboard_context, render_operator_dashboard_html
+from .grafana_dashboard import build_grafana_dashboard_envelope, build_operator_dashboard_prometheus_metrics
 from .report_tools import IncidentReportBuilder
 from .tracker_tools import TrackerTools
 
@@ -28,7 +29,7 @@ def create_app(db_path: str | None = None):
     """
     try:
         from fastapi import Body, FastAPI, HTTPException
-        from fastapi.responses import HTMLResponse
+        from fastapi.responses import HTMLResponse, Response
         from pydantic import BaseModel, Field
     except Exception as exc:  # pragma: no cover - covered by optional deployment
         raise RuntimeError("FastAPI is optional. Install with: pip install -e .[api]") from exc
@@ -124,6 +125,8 @@ def create_app(db_path: str | None = None):
                 "evidence_index_rebuild_runs": "GET /evidence/pipeline/rebuild/runs",
                 "operator_dashboard": "GET /operator/dashboard",
                 "operator_dashboard_data": "GET /operator/dashboard/data",
+                "operator_dashboard_metrics": "GET /operator/dashboard/metrics",
+                "operator_grafana_dashboard": "GET /operator/dashboard/grafana/dashboard.json",
                 "ask": "POST /assistant/ask",
                 "assistant_summary": "POST /assistant/events/{event_id}/summary",
                 "assistant_summaries": "GET /assistant/summaries",
@@ -174,6 +177,10 @@ def create_app(db_path: str | None = None):
                 "operator_dashboard_charts": True,
                 "operator_dashboard_external_chart_assets": False,
                 "operator_dashboard_client_side_chart_library": False,
+                "operator_dashboard_prometheus_metrics": True,
+                "operator_dashboard_metrics_external_upload": False,
+                "operator_dashboard_grafana_dashboard_json": True,
+                "operator_dashboard_grafana_external_datasource": False,
             },
         }
 
@@ -215,6 +222,33 @@ def create_app(db_path: str | None = None):
             fingerprint_limit=fingerprint_limit,
             retention_limit=retention_limit,
         )
+
+    @app.get("/operator/dashboard/metrics")
+    def operator_dashboard_metrics(
+        session_id: str | None = None,
+        camera_id: str | None = None,
+        profile_id: str | None = None,
+        limit: int = 10,
+        fingerprint_limit: int = 5,
+        retention_limit: int = 5,
+    ) -> Response:
+        context = build_operator_dashboard_context(
+            db,
+            session_id=session_id,
+            camera_id=camera_id,
+            profile_id=profile_id,
+            limit=limit,
+            fingerprint_limit=fingerprint_limit,
+            retention_limit=retention_limit,
+        )
+        return Response(
+            content=build_operator_dashboard_prometheus_metrics(context),
+            media_type="text/plain; version=0.0.4; charset=utf-8",
+        )
+
+    @app.get("/operator/dashboard/grafana/dashboard.json")
+    def operator_grafana_dashboard() -> dict[str, Any]:
+        return build_grafana_dashboard_envelope()
 
     @app.get("/health")
     def health() -> dict[str, Any]:

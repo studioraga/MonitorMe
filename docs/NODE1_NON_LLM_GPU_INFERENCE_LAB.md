@@ -1185,3 +1185,45 @@ python -m pytest -q tests/test_node1_operator_dashboard_charts_phase17.py
 This is still a local facts-only UI. It does not decode media, rerun native
 analysis, upload frames, infer identity/intent/speech content, or execute
 retention/rebuild actions from the dashboard page.
+
+## Phase 19 — Grafana/dashboard integration
+
+Phase 19 connects the facts-only operator dashboard to a local
+Prometheus/Grafana workflow.
+
+Data flow:
+
+```text
+SQLite evidence index + audit rows
+  -> build_operator_dashboard_context(...)
+  -> /operator/dashboard/data
+  -> /operator/dashboard/metrics
+  -> Prometheus scrape
+  -> Grafana dashboard JSON
+```
+
+The integration deliberately reuses the Phase 15-18 dashboard context rather
+than adding a second interpretation layer. The exported metrics and Grafana
+panels remain facts-only and local-only:
+
+- no media decode in the metrics/API path
+- no raw frame upload
+- no native rerun
+- no external service calls
+- no identity, intent, speech-content, danger, or suspiciousness claims
+- no destructive retention or rebuild actions from Grafana
+
+Repository-provided files:
+
+```text
+configs/prometheus/monitorme_operator_dashboard.yml
+configs/grafana/dashboards/monitorme_operator_dashboard.json
+configs/grafana/provisioning/dashboards/monitorme_operator_dashboard.yml
+```
+
+Validation:
+
+```bash
+./native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase19_grafana_dashboard_selftest.sh
+python -m pytest -q tests/test_node1_operator_dashboard_grafana_phase19.py
+```

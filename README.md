@@ -1280,3 +1280,47 @@ Safety contract:
 - no native rerun
 - no identity, intent, speech-content, danger, or suspiciousness claims
 - no destructive retention or rebuild action from the dashboard
+
+### Node1 non-LLM GPU lab Phase 19: Grafana/dashboard integration
+
+Phase 19 exports the read-only operator dashboard facts as local Prometheus
+metrics and provides a Grafana dashboard definition for Node1 observability.
+The integration is intentionally a projection of already persisted SQLite
+facts. It does not decode media, upload raw frames, rerun native analysis, or
+emit semantic/identity/intent/speech claims.
+
+New local endpoints:
+
+```bash
+curl -sS http://127.0.0.1:8088/operator/dashboard/metrics
+curl -sS http://127.0.0.1:8088/operator/dashboard/grafana/dashboard.json | python3 -m json.tool
+```
+
+The Prometheus exposition includes facts-only gauges such as:
+
+- `monitorme_operator_profile_count`
+- `monitorme_operator_fingerprint_count`
+- `monitorme_operator_key_moment_count`
+- `monitorme_operator_profile_fingerprints`
+- `monitorme_operator_latency_breakdown_ms`
+- `monitorme_operator_operation_audit_runs`
+- `monitorme_operator_safety_check_ok`
+- `monitorme_operator_privacy_flag`
+
+Static integration snippets are included for local deployment:
+
+```text
+configs/prometheus/monitorme_operator_dashboard.yml
+configs/grafana/dashboards/monitorme_operator_dashboard.json
+configs/grafana/provisioning/dashboards/monitorme_operator_dashboard.yml
+```
+
+The dashboard JSON is also available from the API so a local Grafana instance
+can import the exact same dashboard model used by the repository.
+
+Validation:
+
+```bash
+./native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase19_grafana_dashboard_selftest.sh
+python -m pytest -q tests/test_node1_operator_dashboard_grafana_phase19.py
+```

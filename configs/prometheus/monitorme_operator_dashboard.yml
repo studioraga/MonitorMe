@@ -1,0 +1,10 @@
+# MonitorMe Phase 19 Prometheus scrape snippet.
+# Merge this scrape_configs entry into your existing Prometheus config.
+# The endpoint is local-only and exports facts-only operator dashboard metrics.
+scrape_configs:
+  - job_name: monitorme_operator_dashboard
+    metrics_path: /operator/dashboard/metrics
+    scrape_interval: 15s
+    static_configs:
+      - targets:
+          - 127.0.0.1:8088

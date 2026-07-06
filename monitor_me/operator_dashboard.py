@@ -287,6 +287,8 @@ def build_operator_dashboard_context(
             "api_retention_plan": "/evidence/pipeline/retention/plan",
             "api_retention_schedule": "/evidence/pipeline/retention/schedule",
             "api_rebuild_plan": "/evidence/pipeline/rebuild/plan",
+            "prometheus_metrics": "/operator/dashboard/metrics",
+            "grafana_dashboard_json": "/operator/dashboard/grafana/dashboard.json",
             "docs": "/docs",
             "openapi": "/openapi.json",
         },
@@ -308,6 +310,10 @@ def build_operator_dashboard_context(
             "operator_dashboard_charts": True,
             "operator_dashboard_external_chart_assets": False,
             "operator_dashboard_client_side_chart_library": False,
+            "operator_dashboard_prometheus_metrics": True,
+            "operator_dashboard_metrics_external_upload": False,
+            "operator_dashboard_grafana_dashboard_json": True,
+            "operator_dashboard_grafana_external_datasource": False,
         },
     }
 
@@ -630,6 +636,8 @@ def render_operator_dashboard_html(context: dict[str, Any]) -> str:
       <a href="/evidence/pipeline/summaries">evidence summaries</a> ·
       <a href="/evidence/pipeline/retention/plan">retention plan</a> ·
       <a href="/evidence/pipeline/rebuild/plan">rebuild plan</a> ·
+      <a href="/operator/dashboard/metrics">Prometheus metrics</a> ·
+      <a href="/operator/dashboard/grafana/dashboard.json">Grafana dashboard JSON</a> ·
       <a href="/docs">OpenAPI docs</a>
     </div>
     <div class="grid">

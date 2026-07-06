@@ -682,3 +682,20 @@ native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase18_operato
 The selftest builds the native CPU lab, runs the native selftest, and then runs
 `tests/test_node1_operator_dashboard_charts_phase17.py` to prove the dashboard
 chart model is facts-only, local-only, and rendered without external assets.
+
+## Phase 19 — Grafana/dashboard integration
+
+Phase 19 adds Prometheus/Grafana integration for the local operator dashboard.
+The native lab itself is unchanged; the phase validates that the native CPU
+selftest still passes and that the Python API exports facts-only dashboard
+metrics for Grafana.
+
+Selftest:
+
+```bash
+./native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase19_grafana_dashboard_selftest.sh
+```
+
+The integration exports `/operator/dashboard/metrics` and a Grafana dashboard
+model at `/operator/dashboard/grafana/dashboard.json`. Both are generated from
+persisted SQLite evidence-index rows and audit rows only.
