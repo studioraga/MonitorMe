@@ -884,3 +884,18 @@ python -m monitor_me.cli gpu-lab-dense-full-frame-synthetic --scenario dense
 ```
 
 Use `MONITORME_GPU_LAB_PREFER_CUDA=1` with a CUDA-built native binary to emit `dense_full_frame_cuda` and `dense_full_frame_cpu_cuda_comparison`. The dense path remains facts-only workload metadata and does not emit object, person, identity, behavior, intent, weapon, or suspiciousness claims.
+
+### Node1 non-LLM GPU lab Phase 6
+
+Phase 6 adds the overlay-heavy path for visual artifact generation. It produces
+a deterministic motion heatmap, alpha-blended RGB overlay, thumbnail RGB output,
+and before/after comparison metrics with CPU/CUDA parity checks.
+
+```bash
+python -m monitor_me.cli gpu-lab-overlay-heavy-synthetic --scenario mixed
+```
+
+Use `MONITORME_GPU_LAB_PREFER_CUDA=1` with a CUDA-built native binary to emit
+`overlay_heavy_cuda` and `overlay_heavy_cpu_cuda_comparison`. The overlay-heavy
+path remains facts-only workload metadata and does not emit object, person,
+identity, behavior, intent, weapon, or suspiciousness claims.

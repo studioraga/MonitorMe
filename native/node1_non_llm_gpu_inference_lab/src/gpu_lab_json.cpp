@@ -565,3 +565,112 @@ std::string dense_full_frame_cpu_cuda_comparison_json(const DenseFullFrameAnalys
 }
 
 } // namespace node1_non_llm
+
+namespace node1_non_llm {
+
+std::string overlay_heavy_analysis_json(const OverlayHeavyAnalysis& a, bool include_output) {
+    std::ostringstream os;
+    os << "{";
+    os << "\"ok\":" << bool_json(a.ok) << ",";
+    os << "\"backend\":\"" << json_escape(a.backend) << "\",";
+    os << "\"schema\":\"" << json_escape(a.schema) << "\",";
+    os << "\"error\":\"" << json_escape(a.error) << "\",";
+    os << "\"width\":" << a.width << ",";
+    os << "\"height\":" << a.height << ",";
+    os << "\"pixel_threshold\":" << a.pixel_threshold << ",";
+    os << "\"alpha\":" << a.alpha << ",";
+    os << "\"alpha_ratio\":" << a.alpha_ratio << ",";
+    os << "\"thumbnail_width\":" << a.thumbnail_width << ",";
+    os << "\"thumbnail_height\":" << a.thumbnail_height << ",";
+    os << "\"pixels_processed\":" << a.pixels_processed << ",";
+    os << "\"changed_pixels\":" << a.changed_pixels << ",";
+    os << "\"changed_ratio\":" << a.changed_ratio << ",";
+    os << "\"bytes_read\":" << a.bytes_read << ",";
+    os << "\"bytes_written\":" << a.bytes_written << ",";
+    os << "\"heatmap_min\":" << a.heatmap_min << ",";
+    os << "\"heatmap_max\":" << a.heatmap_max << ",";
+    os << "\"heatmap_mean\":" << a.heatmap_mean << ",";
+    os << "\"before_after_max_diff\":" << a.before_after_max_diff << ",";
+    os << "\"before_after_abs_mean\":" << a.before_after_abs_mean << ",";
+    os << "\"previous_mean\":" << a.previous_mean << ",";
+    os << "\"current_mean\":" << a.current_mean << ",";
+    os << "\"lighting_delta\":" << a.lighting_delta << ",";
+    os << "\"overlay_mean\":" << a.overlay_mean << ",";
+    os << "\"thumbnail_mean\":" << a.thumbnail_mean << ",";
+    os << "\"heatmap_elements\":" << a.heatmap.size() << ",";
+    os << "\"overlay_rgb_elements\":" << a.overlay_rgb.size() << ",";
+    os << "\"thumbnail_rgb_elements\":" << a.thumbnail_rgb.size() << ",";
+    os << "\"facts_only\":true,";
+    os << "\"note\":\"Overlay-heavy alpha blend, motion heatmap, thumbnail, and before/after comparison workload metrics only; no object, identity, behavior, or intent claim is emitted.\",";
+    os << "\"timing\":" << stage_timing_json(a.timing);
+    if (include_output) {
+        os << ",\"heatmap\":" << uint8_vector_json(a.heatmap);
+        os << ",\"overlay_rgb\":" << uint8_vector_json(a.overlay_rgb);
+        os << ",\"thumbnail_rgb\":" << uint8_vector_json(a.thumbnail_rgb);
+    }
+    os << "}";
+    return os.str();
+}
+
+std::string overlay_heavy_cpu_cuda_comparison_json(const OverlayHeavyAnalysis& cpu, const OverlayHeavyAnalysis& cuda) {
+    const bool heatmap_equal = cpu.heatmap == cuda.heatmap;
+    const bool overlay_equal = cpu.overlay_rgb == cuda.overlay_rgb;
+    const bool thumbnail_equal = cpu.thumbnail_rgb == cuda.thumbnail_rgb;
+    std::size_t mismatch_count = 0;
+    int max_abs_diff = 0;
+    auto compare_u8 = [&](const std::vector<std::uint8_t>& a, const std::vector<std::uint8_t>& b) {
+        if (a.size() != b.size()) {
+            mismatch_count += std::max(a.size(), b.size());
+            max_abs_diff = 255;
+            return;
+        }
+        for (std::size_t i = 0; i < a.size(); ++i) {
+            const int diff = std::abs(static_cast<int>(a[i]) - static_cast<int>(b[i]));
+            if (diff != 0) {
+                ++mismatch_count;
+                max_abs_diff = std::max(max_abs_diff, diff);
+            }
+        }
+    };
+    compare_u8(cpu.heatmap, cuda.heatmap);
+    compare_u8(cpu.overlay_rgb, cuda.overlay_rgb);
+    compare_u8(cpu.thumbnail_rgb, cuda.thumbnail_rgb);
+
+    const double heatmap_mean_abs_diff = std::abs(cpu.heatmap_mean - cuda.heatmap_mean);
+    const double overlay_mean_abs_diff = std::abs(cpu.overlay_mean - cuda.overlay_mean);
+    const double thumbnail_mean_abs_diff = std::abs(cpu.thumbnail_mean - cuda.thumbnail_mean);
+    const double before_after_abs_mean_diff = std::abs(cpu.before_after_abs_mean - cuda.before_after_abs_mean);
+    const double lighting_delta_abs_diff = std::abs(cpu.lighting_delta - cuda.lighting_delta);
+    const bool metrics_close = cpu.changed_pixels == cuda.changed_pixels
+        && cpu.before_after_max_diff == cuda.before_after_max_diff
+        && cpu.heatmap_min == cuda.heatmap_min
+        && cpu.heatmap_max == cuda.heatmap_max
+        && heatmap_mean_abs_diff <= 1e-9
+        && overlay_mean_abs_diff <= 1e-9
+        && thumbnail_mean_abs_diff <= 1e-9
+        && before_after_abs_mean_diff <= 1e-9
+        && lighting_delta_abs_diff <= 1e-9;
+
+    std::ostringstream os;
+    os << "{";
+    os << "\"ok\":" << bool_json(cpu.ok && cuda.ok && heatmap_equal && overlay_equal && thumbnail_equal && metrics_close) << ",";
+    os << "\"schema\":\"node1_non_llm_overlay_heavy_cpu_cuda_compare.v0.1\",";
+    os << "\"heatmap_equal\":" << bool_json(heatmap_equal) << ",";
+    os << "\"overlay_equal\":" << bool_json(overlay_equal) << ",";
+    os << "\"thumbnail_equal\":" << bool_json(thumbnail_equal) << ",";
+    os << "\"mismatch_count\":" << mismatch_count << ",";
+    os << "\"max_abs_diff\":" << max_abs_diff << ",";
+    os << "\"metrics_close\":" << bool_json(metrics_close) << ",";
+    os << "\"changed_pixels_equal\":" << bool_json(cpu.changed_pixels == cuda.changed_pixels) << ",";
+    os << "\"before_after_max_diff_equal\":" << bool_json(cpu.before_after_max_diff == cuda.before_after_max_diff) << ",";
+    os << "\"heatmap_mean_abs_diff\":" << heatmap_mean_abs_diff << ",";
+    os << "\"overlay_mean_abs_diff\":" << overlay_mean_abs_diff << ",";
+    os << "\"thumbnail_mean_abs_diff\":" << thumbnail_mean_abs_diff << ",";
+    os << "\"before_after_abs_mean_diff\":" << before_after_abs_mean_diff << ",";
+    os << "\"lighting_delta_abs_diff\":" << lighting_delta_abs_diff << ",";
+    os << "\"facts_only\":true";
+    os << "}";
+    return os.str();
+}
+
+} // namespace node1_non_llm

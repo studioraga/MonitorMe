@@ -10,6 +10,7 @@
 #include <vector>
 #include "node1_non_llm/isp_filters.hpp"
 #include "node1_non_llm/mixed_region.hpp"
+#include "node1_non_llm/overlay_heavy.hpp"
 
 using namespace node1_non_llm;
 
@@ -286,6 +287,49 @@ void test_dense_full_frame_cpu() {
     require(!validate_dense_full_frame_config(cfg, error), "invalid dense width accepted");
 }
 
+
+void test_overlay_heavy_cpu() {
+    const int width = 16;
+    const int height = 8;
+    std::vector<std::uint8_t> prev(static_cast<std::size_t>(width * height), 10U);
+    std::vector<std::uint8_t> curr = prev;
+    paint(curr, width, height, 0, 0, width / 2, height, 210U);
+
+    OverlayHeavyConfig cfg;
+    cfg.width = width;
+    cfg.height = height;
+    cfg.pixel_threshold = 30;
+    cfg.alpha = 128;
+    cfg.thumbnail_width = 4;
+    cfg.thumbnail_height = 2;
+    cfg.collect_output = true;
+
+    std::string error;
+    require(validate_overlay_heavy_config(cfg, error), "valid overlay-heavy config rejected");
+    const auto analysis = analyze_overlay_heavy_cpu(prev.data(), curr.data(), cfg);
+    require(analysis.ok, "overlay-heavy CPU analysis failed: " + analysis.error);
+    require(analysis.pixels_processed == static_cast<std::uint64_t>(width * height), "overlay pixels_processed mismatch");
+    require(analysis.changed_pixels == static_cast<std::uint64_t>((width / 2) * height), "overlay changed pixel mismatch");
+    require(analysis.heatmap.size() == static_cast<std::size_t>(width * height), "overlay heatmap size mismatch");
+    require(analysis.overlay_rgb.size() == static_cast<std::size_t>(width * height * 3), "overlay RGB size mismatch");
+    require(analysis.thumbnail_rgb.size() == static_cast<std::size_t>(cfg.thumbnail_width * cfg.thumbnail_height * 3), "overlay thumbnail size mismatch");
+    require(analysis.heatmap_max == 200, "overlay heatmap max mismatch");
+    require(analysis.before_after_max_diff == 200, "overlay before/after max diff mismatch");
+    require(analysis.lighting_delta == 100.0, "overlay lighting delta mismatch");
+    require(analysis.overlay_mean > 0.0, "overlay mean not populated");
+    require(analysis.thumbnail_mean > 0.0, "overlay thumbnail mean not populated");
+    require(analysis.bytes_read == analysis.pixels_processed * 2U, "overlay bytes_read mismatch");
+    require(analysis.bytes_written == analysis.pixels_processed + analysis.pixels_processed * 3U + static_cast<std::uint64_t>(cfg.thumbnail_width * cfg.thumbnail_height * 3), "overlay bytes_written mismatch");
+
+    const std::string json = overlay_heavy_analysis_json(analysis, false);
+    require(json.find("\"schema\":\"node1_non_llm_overlay_heavy.v0.1\"") != std::string::npos, "overlay JSON missing schema");
+    require(json.find("\"facts_only\":true") != std::string::npos, "overlay JSON missing facts_only");
+    require(json.find("\"thumbnail_rgb_elements\":") != std::string::npos, "overlay JSON missing thumbnail element count");
+
+    cfg.alpha = 256;
+    require(!validate_overlay_heavy_config(cfg, error), "invalid overlay alpha accepted");
+}
+
 void test_isp_filter_reference_equivalence() {
     const int width = 9;
     const int height = 7;
@@ -394,6 +438,7 @@ int main() {
         test_sparse_roi_cpu();
         test_mixed_region_cpu();
         test_dense_full_frame_cpu();
+        test_overlay_heavy_cpu();
         test_isp_filter_reference_equivalence();
         test_isp_known_values();
         test_pgm_ppm_io();

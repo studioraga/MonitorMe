@@ -5,6 +5,7 @@
 #include "node1_non_llm/sparse_roi.hpp"
 #include "node1_non_llm/mixed_region.hpp"
 #include "node1_non_llm/dense_full_frame.hpp"
+#include "node1_non_llm/overlay_heavy.hpp"
 
 namespace node1_non_llm {
 
@@ -49,6 +50,11 @@ DenseFullFrameAnalysis analyze_dense_full_frame_cuda(
     const std::uint8_t* previous_gray,
     const std::uint8_t* current_gray,
     const DenseFullFrameConfig& cfg);
+
+OverlayHeavyAnalysis analyze_overlay_heavy_cuda(
+    const std::uint8_t* previous_gray,
+    const std::uint8_t* current_gray,
+    const OverlayHeavyConfig& cfg);
 #endif
 
 } // namespace node1_non_llm

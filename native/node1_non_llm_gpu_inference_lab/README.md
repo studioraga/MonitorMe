@@ -373,3 +373,42 @@ The JSON emits `dense_full_frame` for the CPU reference path,
 `dense_full_frame_cpu_cuda_comparison` for parity facts. The module remains
 facts-only workload metadata; it does not claim object identity, behavior,
 intent, weapons, or suspicious activity.
+
+## Phase 6: Overlay-heavy alpha blend / heatmap / thumbnail path
+
+Phase 6 adds the overlay-heavy path for visual artifact generation. The path
+runs full-frame absolute diff, deterministic motion heatmap generation,
+alpha-blended RGB overlay generation, thumbnail generation, and before/after
+comparison facts.
+
+Native CPU validation:
+
+```bash
+./scripts/run_node1_gpu_lab_phase6_overlay_heavy_selftest.sh
+```
+
+Native CUDA validation after `./scripts/build_node1_gpu_lab.sh`:
+
+```bash
+./scripts/run_node1_gpu_lab_phase6_overlay_heavy_cuda_selftest.sh
+```
+
+Manual example:
+
+```bash
+./build/node1_non_llm_gpu_lab \
+  --mode overlay-heavy-synthetic \
+  --scenario mixed \
+  --width 320 \
+  --height 240 \
+  --thumbnail-width 64 \
+  --thumbnail-height 48 \
+  --gpu \
+  --include-output
+```
+
+The JSON emits `overlay_heavy` for the CPU reference path,
+`overlay_heavy_cuda` for the CUDA path, and
+`overlay_heavy_cpu_cuda_comparison` for parity facts. The module remains
+facts-only workload metadata; it does not claim object identity, behavior,
+intent, weapons, or suspicious activity.

@@ -118,6 +118,21 @@ def cmd_gpu_lab_dense_full_frame_synthetic(args: argparse.Namespace) -> int:
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0 if result.get("ok") else 3
 
+
+def cmd_gpu_lab_overlay_heavy_synthetic(args: argparse.Namespace) -> int:
+    config = GpuLabConfig.from_env(enabled=True)
+    runner = Node1NonLLMGpuLabRunner(config)
+    result = runner.run_overlay_heavy_synthetic(
+        scenario=args.scenario,
+        width=args.width,
+        height=args.height,
+        thumbnail_width=args.thumbnail_width,
+        thumbnail_height=args.thumbnail_height,
+        alpha=args.alpha,
+    )
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0 if result.get("ok") else 3
+
 def cmd_gpu_lab_isp_synthetic(args: argparse.Namespace) -> int:
     config = GpuLabConfig.from_env(enabled=True)
     runner = Node1NonLLMGpuLabRunner(config)
@@ -368,6 +383,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--width", type=int, default=320)
     p.add_argument("--height", type=int, default=240)
     p.set_defaults(func=cmd_gpu_lab_dense_full_frame_synthetic)
+
+
+    p = sub.add_parser("gpu-lab-overlay-heavy-synthetic", help="Run overlay-heavy alpha blend, heatmap, thumbnail, and before/after validation; CUDA comparison is used when available")
+    p.add_argument("--scenario", default="mixed", choices=["mixed", "dense", "sparse"])
+    p.add_argument("--width", type=int, default=320)
+    p.add_argument("--height", type=int, default=240)
+    p.add_argument("--thumbnail-width", type=int, default=64)
+    p.add_argument("--thumbnail-height", type=int, default=48)
+    p.add_argument("--alpha", type=int, default=128)
+    p.set_defaults(func=cmd_gpu_lab_overlay_heavy_synthetic)
 
     p = sub.add_parser("gpu-lab-isp-synthetic", help="Run ISP synthetic filter validation; CUDA comparison is used when available")
     p.add_argument("--filter", default="sobel-mag", choices=["blur", "sharpen", "edge", "sobel-x", "sobel-y", "sobel-mag"])

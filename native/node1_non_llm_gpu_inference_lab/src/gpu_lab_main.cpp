@@ -145,7 +145,7 @@ std::vector<float> make_synthetic_audio(int sample_count) {
 }
 
 void print_usage() {
-    std::cerr << "node1_non_llm_gpu_lab --mode synthetic|analyze-raw-gray|audio-raw-f32|isp-synthetic|isp-pgm|sparse-roi-synthetic|mixed-region-synthetic|dense-full-frame-synthetic [options]\n"
+    std::cerr << "node1_non_llm_gpu_lab --mode synthetic|analyze-raw-gray|audio-raw-f32|isp-synthetic|isp-pgm|sparse-roi-synthetic|mixed-region-synthetic|dense-full-frame-synthetic|overlay-heavy-synthetic [options]\n"
               << "  --scenario sparse|mixed|dense|contiguous|scattered synthetic frame pattern\n"
               << "  --prev previous.gray --curr current.gray --width W --height H\n"
               << "  --audio samples.f32 --audio-samples N --audio-window-samples N\n"
@@ -209,6 +209,10 @@ int main(int argc, char** argv) {
             ran_frame = true;
         } else if (mode == "dense-full-frame-synthetic") {
             make_synthetic_frames(width, height, arg_string(args, "scenario", "dense"), prev, curr);
+            cpu_frame = analyze_gray_frames_cpu(prev.data(), curr.data(), tile_cfg);
+            ran_frame = true;
+        } else if (mode == "overlay-heavy-synthetic") {
+            make_synthetic_frames(width, height, arg_string(args, "scenario", "mixed"), prev, curr);
             cpu_frame = analyze_gray_frames_cpu(prev.data(), curr.data(), tile_cfg);
             ran_frame = true;
         } else if (mode != "audio-raw-f32" && mode != "isp-synthetic" && mode != "isp-pgm") {
@@ -368,11 +372,35 @@ int main(int argc, char** argv) {
 #endif
         }
 
+        OverlayHeavyAnalysis cpu_overlay_heavy;
+        OverlayHeavyAnalysis gpu_overlay_heavy;
+        bool ran_overlay_heavy = false;
+        bool ran_overlay_heavy_cuda = false;
+        if (mode == "overlay-heavy-synthetic") {
+            OverlayHeavyConfig overlay_cfg;
+            overlay_cfg.width = width;
+            overlay_cfg.height = height;
+            overlay_cfg.pixel_threshold = tile_cfg.pixel_threshold;
+            overlay_cfg.alpha = arg_int(args, "alpha", 128);
+            overlay_cfg.thumbnail_width = arg_int(args, "thumbnail-width", 64);
+            overlay_cfg.thumbnail_height = arg_int(args, "thumbnail-height", 48);
+            overlay_cfg.collect_output = true;
+            cpu_overlay_heavy = analyze_overlay_heavy_cpu(prev.data(), curr.data(), overlay_cfg);
+            ran_overlay_heavy = true;
+#ifdef NODE1_NON_LLM_WITH_CUDA
+            if (has_flag(args, "gpu")) {
+                gpu_overlay_heavy = analyze_overlay_heavy_cuda(prev.data(), curr.data(), overlay_cfg);
+                ran_overlay_heavy_cuda = true;
+            }
+#endif
+        }
+
 #ifndef NODE1_NON_LLM_WITH_CUDA
         (void)ran_isp_cuda;
         (void)ran_sparse_roi_cuda;
         (void)ran_mixed_region_cuda;
         (void)ran_dense_full_frame_cuda;
+        (void)ran_overlay_heavy_cuda;
 #endif
         std::ostringstream os;
         os << "{";
@@ -432,6 +460,15 @@ int main(int argc, char** argv) {
 #else
         os << ",\"dense_full_frame_cuda\":null";
         os << ",\"dense_full_frame_cpu_cuda_comparison\":null";
+#endif
+        const bool include_overlay_heavy_output = has_flag(args, "include-output");
+        os << ",\"overlay_heavy\":" << (ran_overlay_heavy ? overlay_heavy_analysis_json(cpu_overlay_heavy, include_overlay_heavy_output) : "null");
+#ifdef NODE1_NON_LLM_WITH_CUDA
+        os << ",\"overlay_heavy_cuda\":" << (ran_overlay_heavy_cuda ? overlay_heavy_analysis_json(gpu_overlay_heavy, include_overlay_heavy_output) : "null");
+        os << ",\"overlay_heavy_cpu_cuda_comparison\":" << (ran_overlay_heavy_cuda ? overlay_heavy_cpu_cuda_comparison_json(cpu_overlay_heavy, gpu_overlay_heavy) : "null");
+#else
+        os << ",\"overlay_heavy_cuda\":null";
+        os << ",\"overlay_heavy_cpu_cuda_comparison\":null";
 #endif
         if (ran_isp) {
 

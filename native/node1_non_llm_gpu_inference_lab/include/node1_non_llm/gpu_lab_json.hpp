@@ -5,6 +5,7 @@
 #include "node1_non_llm/sparse_roi.hpp"
 #include "node1_non_llm/mixed_region.hpp"
 #include "node1_non_llm/dense_full_frame.hpp"
+#include "node1_non_llm/overlay_heavy.hpp"
 
 #include <cstdint>
 #include <string>
@@ -27,5 +28,7 @@ std::string mixed_region_analysis_json(const MixedRegionAnalysis& analysis, bool
 std::string mixed_region_cpu_cuda_comparison_json(const MixedRegionAnalysis& cpu, const MixedRegionAnalysis& cuda);
 std::string dense_full_frame_analysis_json(const DenseFullFrameAnalysis& analysis, bool include_output = false);
 std::string dense_full_frame_cpu_cuda_comparison_json(const DenseFullFrameAnalysis& cpu, const DenseFullFrameAnalysis& cuda);
+std::string overlay_heavy_analysis_json(const OverlayHeavyAnalysis& analysis, bool include_output = false);
+std::string overlay_heavy_cpu_cuda_comparison_json(const OverlayHeavyAnalysis& cpu, const OverlayHeavyAnalysis& cuda);
 
 } // namespace node1_non_llm

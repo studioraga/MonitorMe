@@ -1344,3 +1344,320 @@ DenseFullFrameAnalysis analyze_dense_full_frame_cuda(
 }
 
 } // namespace node1_non_llm
+
+namespace node1_non_llm {
+namespace {
+
+__device__ __forceinline__ unsigned char overlay_blend_channel_device(unsigned char base, unsigned char overlay, int alpha) {
+    const int inv = 255 - alpha;
+    return static_cast<unsigned char>((static_cast<int>(base) * inv + static_cast<int>(overlay) * alpha + 127) / 255);
+}
+
+__global__ void overlay_heavy_heat_blend_kernel(
+    const std::uint8_t* previous_gray,
+    const std::uint8_t* current_gray,
+    int total,
+    int pixel_threshold,
+    int alpha,
+    std::uint8_t* heatmap,
+    std::uint8_t* overlay_rgb,
+    unsigned long long* changed_pixels,
+    unsigned long long* sum_diff,
+    unsigned long long* sum_prev,
+    unsigned long long* sum_curr,
+    unsigned long long* sum_overlay,
+    int* diff_min,
+    int* diff_max) {
+
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= total) {
+        return;
+    }
+    const int prev = static_cast<int>(previous_gray[idx]);
+    const int curr = static_cast<int>(current_gray[idx]);
+    const int diff = abs(curr - prev);
+    if (diff > pixel_threshold) {
+        atomicAdd(changed_pixels, 1ULL);
+    }
+    atomicAdd(sum_diff, static_cast<unsigned long long>(diff));
+    atomicAdd(sum_prev, static_cast<unsigned long long>(prev));
+    atomicAdd(sum_curr, static_cast<unsigned long long>(curr));
+    atomicMin(diff_min, diff);
+    atomicMax(diff_max, diff);
+    heatmap[idx] = static_cast<std::uint8_t>(diff);
+
+    const unsigned char base = static_cast<unsigned char>(curr);
+    unsigned char heat_r = base;
+    unsigned char heat_g = base;
+    unsigned char heat_b = base;
+    if (diff > 0) {
+        heat_r = 255U;
+        heat_g = static_cast<unsigned char>(max(0, 255 - diff));
+        heat_b = 0U;
+    }
+    const int j = idx * 3;
+    const unsigned char r = overlay_blend_channel_device(base, heat_r, alpha);
+    const unsigned char g = overlay_blend_channel_device(base, heat_g, alpha);
+    const unsigned char b = overlay_blend_channel_device(base, heat_b, alpha);
+    overlay_rgb[j + 0] = r;
+    overlay_rgb[j + 1] = g;
+    overlay_rgb[j + 2] = b;
+    atomicAdd(sum_overlay, static_cast<unsigned long long>(r));
+    atomicAdd(sum_overlay, static_cast<unsigned long long>(g));
+    atomicAdd(sum_overlay, static_cast<unsigned long long>(b));
+}
+
+__global__ void overlay_thumbnail_kernel(
+    const std::uint8_t* overlay_rgb,
+    int width,
+    int height,
+    int thumbnail_width,
+    int thumbnail_height,
+    std::uint8_t* thumbnail_rgb,
+    unsigned long long* sum_thumbnail) {
+
+    const int total = thumbnail_width * thumbnail_height;
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= total) {
+        return;
+    }
+    const int ty = idx / thumbnail_width;
+    const int tx = idx - ty * thumbnail_width;
+    const int sx = min((tx * width) / thumbnail_width, width - 1);
+    const int sy = min((ty * height) / thumbnail_height, height - 1);
+    const int src = (sy * width + sx) * 3;
+    const int dst = idx * 3;
+    const unsigned char r = overlay_rgb[src + 0];
+    const unsigned char g = overlay_rgb[src + 1];
+    const unsigned char b = overlay_rgb[src + 2];
+    thumbnail_rgb[dst + 0] = r;
+    thumbnail_rgb[dst + 1] = g;
+    thumbnail_rgb[dst + 2] = b;
+    atomicAdd(sum_thumbnail, static_cast<unsigned long long>(r));
+    atomicAdd(sum_thumbnail, static_cast<unsigned long long>(g));
+    atomicAdd(sum_thumbnail, static_cast<unsigned long long>(b));
+}
+
+} // namespace
+
+OverlayHeavyAnalysis analyze_overlay_heavy_cuda(
+    const std::uint8_t* previous_gray,
+    const std::uint8_t* current_gray,
+    const OverlayHeavyConfig& cfg) {
+
+    HostStageTimer total_timer;
+    OverlayHeavyAnalysis out;
+    out.backend = "cuda";
+    out.width = cfg.width;
+    out.height = cfg.height;
+    out.pixel_threshold = cfg.pixel_threshold;
+    out.alpha = cfg.alpha;
+    out.alpha_ratio = static_cast<double>(cfg.alpha) / 255.0;
+    out.thumbnail_width = cfg.thumbnail_width;
+    out.thumbnail_height = cfg.thumbnail_height;
+    out.pixels_processed = static_cast<std::uint64_t>(cfg.width) * static_cast<std::uint64_t>(cfg.height);
+    const std::uint64_t thumbnail_pixels = static_cast<std::uint64_t>(std::max(0, cfg.thumbnail_width)) * static_cast<std::uint64_t>(std::max(0, cfg.thumbnail_height));
+    out.bytes_read = out.pixels_processed * 2U;
+    out.bytes_written = out.pixels_processed + out.pixels_processed * 3U + thumbnail_pixels * 3U;
+
+    std::string error;
+    if (!previous_gray || !current_gray) {
+        out.error = "previous_gray and current_gray must not be null";
+        out.timing.total_ms = total_timer.elapsed_ms();
+        return out;
+    }
+    if (!validate_overlay_heavy_config(cfg, error)) {
+        out.error = error;
+        out.timing.total_ms = total_timer.elapsed_ms();
+        return out;
+    }
+
+    const int total_pixels = cfg.width * cfg.height;
+    const int thumb_pixels = cfg.thumbnail_width * cfg.thumbnail_height;
+    const std::size_t frame_bytes = static_cast<std::size_t>(total_pixels);
+    const std::size_t heatmap_bytes = std::max<std::size_t>(1U, static_cast<std::size_t>(total_pixels));
+    const std::size_t overlay_bytes = std::max<std::size_t>(1U, static_cast<std::size_t>(total_pixels) * 3U);
+    const std::size_t thumb_bytes = std::max<std::size_t>(1U, static_cast<std::size_t>(thumb_pixels) * 3U);
+
+    std::uint8_t* d_prev = nullptr;
+    std::uint8_t* d_curr = nullptr;
+    std::uint8_t* d_heatmap = nullptr;
+    std::uint8_t* d_overlay = nullptr;
+    std::uint8_t* d_thumbnail = nullptr;
+    unsigned long long* d_changed = nullptr;
+    unsigned long long* d_sum_diff = nullptr;
+    unsigned long long* d_sum_prev = nullptr;
+    unsigned long long* d_sum_curr = nullptr;
+    unsigned long long* d_sum_overlay = nullptr;
+    unsigned long long* d_sum_thumbnail = nullptr;
+    int* d_diff_min = nullptr;
+    int* d_diff_max = nullptr;
+
+    auto cleanup = [&]() noexcept {
+        cudaFree(d_prev);
+        cudaFree(d_curr);
+        cudaFree(d_heatmap);
+        cudaFree(d_overlay);
+        cudaFree(d_thumbnail);
+        cudaFree(d_changed);
+        cudaFree(d_sum_diff);
+        cudaFree(d_sum_prev);
+        cudaFree(d_sum_curr);
+        cudaFree(d_sum_overlay);
+        cudaFree(d_sum_thumbnail);
+        cudaFree(d_diff_min);
+        cudaFree(d_diff_max);
+    };
+
+    cudaError_t err = cudaMalloc(&d_prev, frame_bytes);
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMalloc overlay previous frame"); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    err = cudaMalloc(&d_curr, frame_bytes);
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMalloc overlay current frame"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    err = cudaMalloc(&d_heatmap, heatmap_bytes);
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMalloc overlay heatmap"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    err = cudaMalloc(&d_overlay, overlay_bytes);
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMalloc overlay RGB"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    err = cudaMalloc(&d_thumbnail, thumb_bytes);
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMalloc overlay thumbnail"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    err = cudaMalloc(&d_changed, sizeof(unsigned long long));
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMalloc overlay changed counter"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    err = cudaMalloc(&d_sum_diff, sizeof(unsigned long long));
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMalloc overlay diff sum"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    err = cudaMalloc(&d_sum_prev, sizeof(unsigned long long));
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMalloc overlay previous sum"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    err = cudaMalloc(&d_sum_curr, sizeof(unsigned long long));
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMalloc overlay current sum"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    err = cudaMalloc(&d_sum_overlay, sizeof(unsigned long long));
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMalloc overlay RGB sum"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    err = cudaMalloc(&d_sum_thumbnail, sizeof(unsigned long long));
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMalloc overlay thumbnail sum"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    err = cudaMalloc(&d_diff_min, sizeof(int));
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMalloc overlay diff min"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    err = cudaMalloc(&d_diff_max, sizeof(int));
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMalloc overlay diff max"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+
+    {
+        HostStageTimer h2d_timer;
+        err = cudaMemcpy(d_prev, previous_gray, frame_bytes, cudaMemcpyHostToDevice);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy overlay previous frame"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemcpy(d_curr, current_gray, frame_bytes, cudaMemcpyHostToDevice);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy overlay current frame"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemset(d_heatmap, 0, heatmap_bytes);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemset overlay heatmap"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemset(d_overlay, 0, overlay_bytes);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemset overlay RGB"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemset(d_thumbnail, 0, thumb_bytes);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemset overlay thumbnail"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemset(d_changed, 0, sizeof(unsigned long long));
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemset overlay changed counter"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemset(d_sum_diff, 0, sizeof(unsigned long long));
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemset overlay diff sum"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemset(d_sum_prev, 0, sizeof(unsigned long long));
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemset overlay previous sum"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemset(d_sum_curr, 0, sizeof(unsigned long long));
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemset overlay current sum"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemset(d_sum_overlay, 0, sizeof(unsigned long long));
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemset overlay RGB sum"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemset(d_sum_thumbnail, 0, sizeof(unsigned long long));
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemset overlay thumbnail sum"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        const int init_min = 255;
+        const int init_zero = 0;
+        err = cudaMemcpy(d_diff_min, &init_min, sizeof(int), cudaMemcpyHostToDevice);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy overlay diff min init"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemcpy(d_diff_max, &init_zero, sizeof(int), cudaMemcpyHostToDevice);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy overlay diff max init"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        out.timing.h2d_ms = h2d_timer.elapsed_ms();
+    }
+
+    CudaEventTimer kernel_timer;
+    if (kernel_timer.ok()) {
+        err = kernel_timer.start();
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaEventRecord overlay start"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    }
+    const int threads = 256;
+    const int blocks = (total_pixels + threads - 1) / threads;
+    overlay_heavy_heat_blend_kernel<<<blocks, threads>>>(
+        d_prev, d_curr, total_pixels, cfg.pixel_threshold, cfg.alpha,
+        d_heatmap, d_overlay, d_changed, d_sum_diff, d_sum_prev, d_sum_curr,
+        d_sum_overlay, d_diff_min, d_diff_max);
+    err = cudaGetLastError();
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "overlay_heavy_heat_blend_kernel launch"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    const int thumb_blocks = (thumb_pixels + threads - 1) / threads;
+    overlay_thumbnail_kernel<<<thumb_blocks, threads>>>(
+        d_overlay, cfg.width, cfg.height, cfg.thumbnail_width, cfg.thumbnail_height,
+        d_thumbnail, d_sum_thumbnail);
+    err = cudaGetLastError();
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "overlay_thumbnail_kernel launch"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    if (kernel_timer.ok()) {
+        err = kernel_timer.stop(out.timing.kernel_ms);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "overlay heavy CUDA event sync"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    } else {
+        HostStageTimer sync_timer;
+        err = cudaDeviceSynchronize();
+        out.timing.kernel_ms = sync_timer.elapsed_ms();
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "overlay heavy CUDA sync"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    }
+
+    if (cfg.collect_output) {
+        out.heatmap.assign(static_cast<std::size_t>(total_pixels), 0U);
+        out.overlay_rgb.assign(static_cast<std::size_t>(total_pixels) * 3U, 0U);
+        out.thumbnail_rgb.assign(static_cast<std::size_t>(thumb_pixels) * 3U, 0U);
+    }
+    unsigned long long h_changed = 0ULL;
+    unsigned long long h_sum_diff = 0ULL;
+    unsigned long long h_sum_prev = 0ULL;
+    unsigned long long h_sum_curr = 0ULL;
+    unsigned long long h_sum_overlay = 0ULL;
+    unsigned long long h_sum_thumbnail = 0ULL;
+    int h_diff_min = 0;
+    int h_diff_max = 0;
+    {
+        HostStageTimer d2h_timer;
+        if (cfg.collect_output) {
+            err = cudaMemcpy(out.heatmap.data(), d_heatmap, heatmap_bytes, cudaMemcpyDeviceToHost);
+            if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy overlay heatmap"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+            err = cudaMemcpy(out.overlay_rgb.data(), d_overlay, overlay_bytes, cudaMemcpyDeviceToHost);
+            if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy overlay RGB"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+            err = cudaMemcpy(out.thumbnail_rgb.data(), d_thumbnail, thumb_bytes, cudaMemcpyDeviceToHost);
+            if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy overlay thumbnail"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        }
+        err = cudaMemcpy(&h_changed, d_changed, sizeof(unsigned long long), cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy overlay changed counter"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemcpy(&h_sum_diff, d_sum_diff, sizeof(unsigned long long), cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy overlay diff sum"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemcpy(&h_sum_prev, d_sum_prev, sizeof(unsigned long long), cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy overlay previous sum"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemcpy(&h_sum_curr, d_sum_curr, sizeof(unsigned long long), cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy overlay current sum"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemcpy(&h_sum_overlay, d_sum_overlay, sizeof(unsigned long long), cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy overlay RGB sum"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemcpy(&h_sum_thumbnail, d_sum_thumbnail, sizeof(unsigned long long), cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy overlay thumbnail sum"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemcpy(&h_diff_min, d_diff_min, sizeof(int), cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy overlay diff min"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemcpy(&h_diff_max, d_diff_max, sizeof(int), cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy overlay diff max"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        out.timing.d2h_ms = d2h_timer.elapsed_ms();
+    }
+
+    out.ok = true;
+    out.changed_pixels = static_cast<std::uint64_t>(h_changed);
+    const double n = static_cast<double>(std::max(1, total_pixels));
+    out.changed_ratio = static_cast<double>(out.changed_pixels) / n;
+    out.heatmap_min = h_diff_min;
+    out.heatmap_max = h_diff_max;
+    out.heatmap_mean = static_cast<double>(h_sum_diff) / n;
+    out.before_after_max_diff = h_diff_max;
+    out.before_after_abs_mean = out.heatmap_mean;
+    out.previous_mean = static_cast<double>(h_sum_prev) / n;
+    out.current_mean = static_cast<double>(h_sum_curr) / n;
+    out.lighting_delta = fabs(out.current_mean - out.previous_mean);
+    out.overlay_mean = static_cast<double>(h_sum_overlay) / (n * 3.0);
+    const double tn = static_cast<double>(std::max(1, thumb_pixels));
+    out.thumbnail_mean = static_cast<double>(h_sum_thumbnail) / (tn * 3.0);
+    out.timing.total_ms = total_timer.elapsed_ms();
+    cleanup();
+    return out;
+}
+
+} // namespace node1_non_llm

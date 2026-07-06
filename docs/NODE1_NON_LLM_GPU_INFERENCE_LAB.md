@@ -600,3 +600,68 @@ Supported synthetic scenarios:
 This module is intentionally non-semantic. It emits only workload, histogram,
 reduction, lighting, normalization, and timing facts. It does not report object
 class, person, identity, behavior, intent, weapon, or suspiciousness claims.
+
+## Phase 6 — Overlay-heavy path
+
+Phase 6 implements the overlay-heavy processing path from the TASK1 roadmap. It
+is intended for workloads where the expensive step is not classification but
+visual artifact generation: motion heatmaps, alpha-blended overlays,
+thumbnails, and before/after comparison facts.
+
+Pipeline:
+
+```text
+previous/current gray frame
+  -> full-frame absolute diff
+  -> motion heatmap uint8 image
+  -> alpha blend current frame with deterministic heat color
+  -> RGB overlay artifact buffer
+  -> thumbnail generation from overlay RGB
+  -> before/after comparison reductions
+  -> CPU-vs-CUDA parity facts
+```
+
+Native mode:
+
+```bash
+node1_non_llm_gpu_lab \
+  --mode overlay-heavy-synthetic \
+  --scenario mixed \
+  --width 320 \
+  --height 240 \
+  --thumbnail-width 64 \
+  --thumbnail-height 48 \
+  --gpu \
+  --include-output
+```
+
+JSON fields:
+
+```text
+overlay_heavy                         CPU reference overlay-heavy result
+overlay_heavy_cuda                    CUDA overlay-heavy result when --gpu is used
+overlay_heavy_cpu_cuda_comparison     heatmap/overlay/thumbnail parity facts
+```
+
+The comparison reports `heatmap_equal`, `overlay_equal`, `thumbnail_equal`,
+`mismatch_count`, `max_abs_diff`, `metrics_close`, changed-pixel equality,
+heatmap/overlay/thumbnail mean differences, before/after diff agreement, and
+lighting-delta agreement.
+
+Validation scripts:
+
+```bash
+native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase6_overlay_heavy_selftest.sh
+native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase6_overlay_heavy_cuda_selftest.sh
+```
+
+Supported synthetic scenarios:
+
+- `mixed`: middle-region activity and mixed route.
+- `dense`: all pixels changed and dense route.
+- `sparse`: sparse activity and sparse route.
+
+This module is intentionally non-semantic. It emits only overlay workload,
+heatmap, thumbnail, before/after comparison, and timing facts. It does not
+report object class, person, identity, behavior, intent, weapon, or
+suspiciousness claims.
