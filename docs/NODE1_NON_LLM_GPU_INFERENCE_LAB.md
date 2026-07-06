@@ -981,3 +981,29 @@ Validate Phase 12:
 native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase12_evidence_index_selftest.sh
 python -m pytest -q tests/test_node1_evidence_index_phase12.py
 ```
+
+### Phase 13: API endpoint exposure for evidence pipeline summaries
+
+Phase 13 exposes the persisted Phase 12 evidence index through local-only FastAPI endpoints. The API reads normalized SQLite rows from `evidence_pipeline_profiles`, `evidence_fingerprints`, `evidence_dedup_groups`, and `evidence_key_moments`, then returns bounded facts-only summaries suitable for operator UI, dashboards, and follow-up evidence review.
+
+Routes:
+
+```text
+GET /evidence/pipeline/summaries
+GET /evidence/pipeline/sessions/{session_id}/summary
+GET /evidence/pipeline/profiles/{profile_id}/summary
+GET /evidence/pipeline/profiles/{profile_id}/fingerprints
+GET /evidence/pipeline/profiles/{profile_id}/dedup-groups
+GET /evidence/pipeline/profiles/{profile_id}/key-moments
+```
+
+The API summary includes profile IDs, event/session/camera references, artifact references, fingerprint counts, media-vs-synthetic ingestion counts, duplicate/key-moment counts, timeline facts, latency/throughput facts, and evidence safety status. Detailed profile endpoints can include key moments, dedup groups, and a bounded fingerprint sample.
+
+The API path is local-only and facts-only. It does not decode media during API calls, does not upload frames, and does not emit object identity, person identity, speech content, behavior, intent, weapon, danger, or suspiciousness claims.
+
+Validate Phase 13:
+
+```bash
+native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase13_evidence_api_selftest.sh
+python -m pytest -q tests/test_node1_evidence_api_phase13.py
+```

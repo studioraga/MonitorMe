@@ -104,6 +104,12 @@ def create_app(db_path: str | None = None):
                 "capture_run": "POST /camera/capture/run",
                 "events": "GET /events",
                 "artifacts": "GET /artifacts",
+                "evidence_pipeline_summaries": "GET /evidence/pipeline/summaries",
+                "evidence_pipeline_session_summary": "GET /evidence/pipeline/sessions/{session_id}/summary",
+                "evidence_pipeline_profile_summary": "GET /evidence/pipeline/profiles/{profile_id}/summary",
+                "evidence_pipeline_profile_fingerprints": "GET /evidence/pipeline/profiles/{profile_id}/fingerprints",
+                "evidence_pipeline_profile_dedup_groups": "GET /evidence/pipeline/profiles/{profile_id}/dedup-groups",
+                "evidence_pipeline_profile_key_moments": "GET /evidence/pipeline/profiles/{profile_id}/key-moments",
                 "ask": "POST /assistant/ask",
                 "assistant_summary": "POST /assistant/events/{event_id}/summary",
                 "assistant_summaries": "GET /assistant/summaries",
@@ -136,6 +142,9 @@ def create_app(db_path: str | None = None):
                 "smolvlm2_after_trigger_only": True,
                 "smolvlm2_enabled_by_default": False,
                 "smolvlm2_short_clip_experimental": True,
+                "evidence_pipeline_api_summaries": True,
+                "evidence_pipeline_api_media_decode": False,
+                "evidence_pipeline_api_external_upload": False,
             },
         }
 
@@ -198,6 +207,158 @@ def create_app(db_path: str | None = None):
     def artifacts(session_id: str | None = None, camera_id: str | None = None, event_id: str | None = None, artifact_type: str | None = None, limit: int = 100) -> dict[str, Any]:
         items = db.list_artifacts(session_id=session_id, camera_id=camera_id, event_id=event_id, artifact_type=artifact_type)
         return {"artifacts": items[:limit], "count": min(len(items), limit)}
+
+    @app.get("/evidence/pipeline/summaries")
+    def evidence_pipeline_summaries(
+        profile_id: str | None = None,
+        event_id: str | None = None,
+        session_id: str | None = None,
+        camera_id: str | None = None,
+        limit: int = 50,
+        detailed: bool = False,
+    ) -> dict[str, Any]:
+        safe_limit = max(1, min(int(limit), 500))
+        items = db.summarize_evidence_pipeline_profiles(
+            profile_id=profile_id,
+            event_id=event_id,
+            session_id=session_id,
+            camera_id=camera_id,
+            limit=safe_limit,
+            detailed=detailed,
+        )
+        return {
+            "ok": True,
+            "schema": "monitorme.api.evidence_pipeline_summaries.v0.1",
+            "evidence_pipeline_summaries": items,
+            "count": len(items),
+            "filters": {
+                "profile_id": profile_id,
+                "event_id": event_id,
+                "session_id": session_id,
+                "camera_id": camera_id,
+                "limit": safe_limit,
+                "detailed": detailed,
+            },
+            "privacy": {
+                "external_upload": False,
+                "raw_frame_upload": False,
+                "media_decode_in_api": False,
+                "semantic_claims": False,
+                "facts_only": True,
+            },
+        }
+
+    @app.get("/evidence/pipeline/sessions/{session_id}/summary")
+    def evidence_pipeline_session_summary(
+        session_id: str,
+        latest_only: bool = True,
+        detailed: bool = True,
+        include_key_moments: bool = True,
+        include_dedup_groups: bool = True,
+        include_fingerprints: bool = False,
+        fingerprint_limit: int = 20,
+    ) -> dict[str, Any]:
+        profiles = db.list_evidence_profiles(session_id=session_id, limit=1 if latest_only else 100)
+        if not profiles:
+            raise HTTPException(status_code=404, detail=f"evidence pipeline profile not found for session_id: {session_id}")
+        summaries: list[dict[str, Any]] = []
+        safe_fingerprint_limit = max(1, min(int(fingerprint_limit), 500))
+        for profile in profiles:
+            summary = db.get_evidence_pipeline_summary(
+                str(profile["profile_id"]),
+                include_fingerprints=include_fingerprints,
+                include_dedup_groups=include_dedup_groups,
+                include_key_moments=include_key_moments,
+                fingerprint_limit=safe_fingerprint_limit,
+                detailed=detailed,
+            )
+            if summary:
+                summaries.append(summary)
+        return {
+            "ok": True,
+            "schema": "monitorme.api.evidence_pipeline_session_summary.v0.1",
+            "session_id": session_id,
+            "latest_only": latest_only,
+            "evidence_pipeline_summaries": summaries,
+            "count": len(summaries),
+            "privacy": {"external_upload": False, "media_decode_in_api": False, "facts_only": True},
+        }
+
+    @app.get("/evidence/pipeline/profiles/{profile_id}/summary")
+    def evidence_pipeline_profile_summary(
+        profile_id: str,
+        detailed: bool = True,
+        include_key_moments: bool = True,
+        include_dedup_groups: bool = True,
+        include_fingerprints: bool = False,
+        fingerprint_limit: int = 20,
+    ) -> dict[str, Any]:
+        safe_fingerprint_limit = max(1, min(int(fingerprint_limit), 500))
+        summary = db.get_evidence_pipeline_summary(
+            profile_id,
+            include_fingerprints=include_fingerprints,
+            include_dedup_groups=include_dedup_groups,
+            include_key_moments=include_key_moments,
+            fingerprint_limit=safe_fingerprint_limit,
+            detailed=detailed,
+        )
+        if not summary:
+            raise HTTPException(status_code=404, detail=f"evidence pipeline profile_id not found: {profile_id}")
+        return {
+            "ok": True,
+            "schema": "monitorme.api.evidence_pipeline_profile_summary.v0.1",
+            "evidence_pipeline_summary": summary,
+            "privacy": {"external_upload": False, "media_decode_in_api": False, "facts_only": True},
+        }
+
+    @app.get("/evidence/pipeline/profiles/{profile_id}/fingerprints")
+    def evidence_pipeline_profile_fingerprints(
+        profile_id: str,
+        from_media: bool | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        if not db.get_evidence_profile(profile_id):
+            raise HTTPException(status_code=404, detail=f"evidence pipeline profile_id not found: {profile_id}")
+        safe_limit = max(1, min(int(limit), 1000))
+        items = db.list_evidence_fingerprints(profile_id=profile_id, from_media=from_media, limit=safe_limit)
+        return {
+            "ok": True,
+            "schema": "monitorme.api.evidence_pipeline_fingerprints.v0.1",
+            "profile_id": profile_id,
+            "evidence_fingerprints": items,
+            "count": len(items),
+            "privacy": {"external_upload": False, "media_decode_in_api": False, "facts_only": True},
+        }
+
+    @app.get("/evidence/pipeline/profiles/{profile_id}/dedup-groups")
+    def evidence_pipeline_profile_dedup_groups(profile_id: str, limit: int = 100) -> dict[str, Any]:
+        if not db.get_evidence_profile(profile_id):
+            raise HTTPException(status_code=404, detail=f"evidence pipeline profile_id not found: {profile_id}")
+        safe_limit = max(1, min(int(limit), 1000))
+        items = db.list_evidence_dedup_groups(profile_id=profile_id, limit=safe_limit)
+        return {
+            "ok": True,
+            "schema": "monitorme.api.evidence_pipeline_dedup_groups.v0.1",
+            "profile_id": profile_id,
+            "evidence_dedup_groups": items,
+            "count": len(items),
+            "privacy": {"external_upload": False, "media_decode_in_api": False, "facts_only": True},
+        }
+
+    @app.get("/evidence/pipeline/profiles/{profile_id}/key-moments")
+    def evidence_pipeline_profile_key_moments(profile_id: str, limit: int = 100) -> dict[str, Any]:
+        if not db.get_evidence_profile(profile_id):
+            raise HTTPException(status_code=404, detail=f"evidence pipeline profile_id not found: {profile_id}")
+        safe_limit = max(1, min(int(limit), 1000))
+        items = db.list_evidence_key_moments(profile_id=profile_id, limit=safe_limit)
+        return {
+            "ok": True,
+            "schema": "monitorme.api.evidence_pipeline_key_moments.v0.1",
+            "profile_id": profile_id,
+            "evidence_key_moments": items,
+            "count": len(items),
+            "privacy": {"external_upload": False, "media_decode_in_api": False, "facts_only": True},
+        }
 
     @app.get("/sessions/{session_id}")
     def session(session_id: str) -> dict[str, Any]:

@@ -585,3 +585,15 @@ Validate Phase 12:
 native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase12_evidence_index_selftest.sh
 python -m pytest -q tests/test_node1_evidence_index_phase12.py
 ```
+
+### Phase 13 — Evidence summary API exposure
+
+Phase 13 exposes the persisted evidence index through MonitorMe FastAPI routes. It is a Python/API layer on top of the Phase 12 SQLite evidence index and does not add a new CUDA workload.
+
+Validation:
+
+```bash
+./scripts/run_node1_gpu_lab_phase13_evidence_api_selftest.sh
+```
+
+The API routes return facts-only evidence summaries, fingerprints, duplicate groups, and key moments. They do not decode media in the API request path and do not emit semantic identity, speech, behavior, intent, weapon, danger, or suspiciousness claims.

@@ -1009,6 +1009,7 @@ class MonitorMeDB:
     def list_evidence_profiles(
         self,
         *,
+        profile_id: str | None = None,
         event_id: str | None = None,
         session_id: str | None = None,
         camera_id: str | None = None,
@@ -1017,6 +1018,8 @@ class MonitorMeDB:
         with self._lock:
             sql = "SELECT * FROM evidence_pipeline_profiles WHERE 1=1"
             args: list[Any] = []
+            if profile_id:
+                sql += " AND profile_id=?"; args.append(profile_id)
             if event_id:
                 sql += " AND event_id=?"; args.append(event_id)
             if session_id:
@@ -1025,6 +1028,120 @@ class MonitorMeDB:
                 sql += " AND camera_id=?"; args.append(camera_id)
             sql += " ORDER BY created_at DESC LIMIT ?"; args.append(int(limit))
             return self._decode_rows(self.conn.execute(sql, args))
+
+    def get_evidence_profile(self, profile_id: str) -> dict[str, Any] | None:
+        rows = self.list_evidence_profiles(profile_id=profile_id, limit=1)
+        return rows[0] if rows else None
+
+    @staticmethod
+    def _evidence_profile_summary(profile: dict[str, Any], *, detailed: bool = False) -> dict[str, Any]:
+        safety = profile.get("safety") if isinstance(profile.get("safety"), dict) else {}
+        timeline = profile.get("timeline") if isinstance(profile.get("timeline"), dict) else {}
+        latency = profile.get("latency") if isinstance(profile.get("latency"), dict) else {}
+        return {
+            "ok": bool(profile.get("safety_ok")) and int(profile.get("violation_count") or 0) == 0,
+            "schema": "monitorme.evidence_pipeline_summary.v0.1",
+            "profile_id": profile.get("profile_id"),
+            "event_id": profile.get("event_id"),
+            "session_id": profile.get("session_id"),
+            "camera_id": profile.get("camera_id"),
+            "created_at": profile.get("created_at"),
+            "native_schema": profile.get("native_schema"),
+            "artifact_refs": {
+                "manifest_artifact_id": profile.get("manifest_artifact_id"),
+                "profile_artifact_id": profile.get("profile_artifact_id"),
+                "manifest_csv_path": profile.get("manifest_csv_path"),
+                "profile_path": profile.get("profile_path"),
+            },
+            "counts": {
+                "capture_manifest_rows": int(profile.get("capture_manifest_rows") or 0),
+                "fingerprint_count": int(profile.get("fingerprint_count") or 0),
+                "media_fingerprint_count": int(profile.get("media_fingerprint_count") or 0),
+                "synthetic_fingerprint_count": int(profile.get("synthetic_fingerprint_count") or 0),
+                "duplicate_group_count": int(profile.get("duplicate_group_count") or 0),
+                "duplicate_clip_count": int(profile.get("duplicate_clip_count") or 0),
+                "unique_clip_count": int(profile.get("unique_clip_count") or 0),
+                "key_moment_count": int(profile.get("key_moment_count") or 0),
+            },
+            "storage": {
+                "planned_read_bytes": int(profile.get("planned_read_bytes") or 0),
+                "total_manifest_bytes": int(profile.get("total_manifest_bytes") or 0),
+            },
+            "ingestion": {
+                "real_media_ingestion": bool(profile.get("real_media_ingestion")),
+                "facts_only": bool(profile.get("facts_only", 1)),
+                "safety_ok": bool(profile.get("safety_ok")),
+                "violation_count": int(profile.get("violation_count") or 0),
+            },
+            "timeline": timeline if detailed else {
+                "timeline_start_ms": timeline.get("timeline_start_ms"),
+                "timeline_end_ms": timeline.get("timeline_end_ms"),
+                "timeline_span_ms": timeline.get("timeline_span_ms"),
+                "covered_duration_ms": timeline.get("covered_duration_ms"),
+                "max_gap_ms": timeline.get("max_gap_ms"),
+                "clip_count": timeline.get("clip_count"),
+            },
+            "latency": latency if detailed else {
+                "total_ms": latency.get("total_ms"),
+                "fingerprint_ms": latency.get("fingerprint_ms"),
+                "dedup_ms": latency.get("dedup_ms"),
+                "key_selection_ms": latency.get("key_selection_ms"),
+                "planned_read_mb_per_s": latency.get("planned_read_mb_per_s"),
+            },
+            "safety": safety if detailed else {
+                "ok": safety.get("ok"),
+                "violation_count": safety.get("violation_count"),
+                "no_semantic_claims": safety.get("no_semantic_claims"),
+                "facts_only": safety.get("facts_only"),
+            },
+            "privacy": {
+                "external_upload": False,
+                "raw_frame_upload": False,
+                "media_decode_in_api": False,
+                "identity": False,
+                "intent": False,
+                "speech_content": False,
+                "semantic_claims": False,
+            },
+        }
+
+    def summarize_evidence_pipeline_profiles(
+        self,
+        *,
+        profile_id: str | None = None,
+        event_id: str | None = None,
+        session_id: str | None = None,
+        camera_id: str | None = None,
+        limit: int = 100,
+        detailed: bool = False,
+    ) -> list[dict[str, Any]]:
+        profiles = self.list_evidence_profiles(
+            profile_id=profile_id, event_id=event_id, session_id=session_id, camera_id=camera_id, limit=limit
+        )
+        return [self._evidence_profile_summary(profile, detailed=detailed) for profile in profiles]
+
+    def get_evidence_pipeline_summary(
+        self,
+        profile_id: str,
+        *,
+        include_fingerprints: bool = False,
+        include_dedup_groups: bool = True,
+        include_key_moments: bool = True,
+        fingerprint_limit: int = 20,
+        detailed: bool = True,
+    ) -> dict[str, Any] | None:
+        profile = self.get_evidence_profile(profile_id)
+        if not profile:
+            return None
+        summary = self._evidence_profile_summary(profile, detailed=detailed)
+        if include_key_moments:
+            summary["key_moments"] = self.list_evidence_key_moments(profile_id=profile_id, limit=100)
+        if include_dedup_groups:
+            summary["dedup_groups"] = self.list_evidence_dedup_groups(profile_id=profile_id, limit=100)
+        if include_fingerprints:
+            summary["fingerprints"] = self.list_evidence_fingerprints(profile_id=profile_id, limit=fingerprint_limit)
+            summary["fingerprints_truncated"] = int(profile.get("fingerprint_count") or 0) > int(fingerprint_limit)
+        return summary
 
     def list_evidence_fingerprints(
         self,

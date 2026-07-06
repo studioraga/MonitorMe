@@ -1038,3 +1038,25 @@ Validate Phase 12:
 native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase12_evidence_index_selftest.sh
 python -m pytest -q tests/test_node1_evidence_index_phase12.py
 ```
+
+### Phase 13 — Evidence pipeline summary API
+
+Phase 13 exposes the persisted evidence index from Phase 12 through local FastAPI endpoints for UI/dashboard consumption:
+
+```text
+GET /evidence/pipeline/summaries
+GET /evidence/pipeline/sessions/{session_id}/summary
+GET /evidence/pipeline/profiles/{profile_id}/summary
+GET /evidence/pipeline/profiles/{profile_id}/fingerprints
+GET /evidence/pipeline/profiles/{profile_id}/dedup-groups
+GET /evidence/pipeline/profiles/{profile_id}/key-moments
+```
+
+These endpoints summarize evidence profile metadata, decoded-keyframe fingerprint rows, duplicate groups, key moments, timeline facts, latency/throughput facts, and safety-validator status from SQLite. They are local-only and facts-only: no media decode occurs inside the API request path, no frame upload occurs, and no identity/intent/speech-content/weapon/suspiciousness claims are emitted.
+
+Validation:
+
+```bash
+native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase13_evidence_api_selftest.sh
+python -m pytest -q tests/test_node1_evidence_api_phase13.py
+```
