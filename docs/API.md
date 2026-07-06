@@ -384,3 +384,38 @@ Safety: non-dry-run rebuild writes normalized evidence-index rows only. It
 retains source events, capture artifact rows, keyframes, capture manifests,
 evidence CSV manifests, and evidence profile JSON artifacts. `replace_existing`
 requires `confirm=true`.
+
+## Phase 18 operator dashboard chart model
+
+`GET /operator/dashboard/data` now returns a richer `charts` object alongside
+cards, selected profile facts, retention audit rows, scheduler rows, and rebuild
+rows.
+
+Important fields:
+
+```json
+{
+  "charts": {
+    "schema": "monitorme.operator_dashboard_charts.v0.1",
+    "source": "persisted_sqlite_evidence_index_rows",
+    "profile_points": [],
+    "fingerprint_composition": [],
+    "latency_breakdown_ms": [],
+    "key_moment_timeline": [],
+    "fingerprint_hamming_sample": [],
+    "operation_audit": [],
+    "safety_checks": [],
+    "privacy": {
+      "facts_only": true,
+      "external_chart_assets": false,
+      "client_side_chart_library": false,
+      "media_decode_in_dashboard": false,
+      "native_rerun": false
+    }
+  }
+}
+```
+
+`GET /operator/dashboard` renders those facts as local inline HTML/CSS/SVG
+charts. It does not load remote chart libraries, make browser-side API calls to
+external services, decode media, or expose destructive retention/rebuild actions.

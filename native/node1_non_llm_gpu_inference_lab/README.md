@@ -666,3 +666,19 @@ native lab selftest script still builds the CPU native lab and runs
 The rebuild restores normalized evidence-index rows from retained
 `evidence_pipeline_profile` JSON artifacts without rerunning native analysis or
 decoding media.
+
+### Phase 18 operator dashboard charts validation
+
+Phase 18 is a MonitorMe API/UI layer on top of the persisted evidence index. It
+adds local chart-ready JSON and inline HTML/SVG dashboard charts. It is not a
+CUDA workload.
+
+Run:
+
+```bash
+native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase18_operator_dashboard_charts_selftest.sh
+```
+
+The selftest builds the native CPU lab, runs the native selftest, and then runs
+`tests/test_node1_operator_dashboard_charts_phase17.py` to prove the dashboard
+chart model is facts-only, local-only, and rendered without external assets.

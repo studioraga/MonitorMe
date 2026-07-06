@@ -1235,3 +1235,48 @@ python -m monitor_me.cli evidence-index-rebuild-runs --limit 20
 
 Use `--replace-existing --yes` only when you intentionally want to replace an
 already persisted normalized index profile for the matching retained event.
+
+### Phase 18: richer operator dashboard charts
+
+Phase 18 expands the local read-only operator dashboard with chart-ready facts and
+inline chart rendering. The dashboard still reads only the persisted SQLite
+evidence index and related retention/rebuild audit rows. It does not fetch
+external JavaScript, load external CSS, decode media, rerun native analysis, or
+execute retention/rebuild actions from the browser.
+
+The dashboard data endpoint now includes:
+
+- `charts.schema = monitorme.operator_dashboard_charts.v0.1`
+- profile fingerprint/key-moment/duplicate-count points
+- fingerprint composition facts: media, synthetic, duplicate clips
+- latency breakdown facts from the selected evidence profile
+- key-moment timeline facts from selected profile rows
+- fingerprint nearest-Hamming sample facts
+- retention/scheduler/rebuild audit counts
+- safety-check status facts
+
+Open the local dashboard:
+
+```bash
+export MONITORME_DB=data/events/monitorme.db
+./scripts/start_api_background.sh
+xdg-open http://127.0.0.1:8088/operator/dashboard
+```
+
+Or inspect the chart model directly:
+
+```bash
+curl -sS 'http://127.0.0.1:8088/operator/dashboard/data?limit=10&fingerprint_limit=5&retention_limit=5' \
+  | python3 -m json.tool
+```
+
+Safety contract:
+
+- facts-only chart model
+- local-only SQLite readback
+- no external chart assets
+- no client-side charting library
+- no API-time media decode
+- no native rerun
+- no identity, intent, speech-content, danger, or suspiciousness claims
+- no destructive retention or rebuild action from the dashboard

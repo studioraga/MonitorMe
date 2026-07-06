@@ -171,6 +171,9 @@ def create_app(db_path: str | None = None):
                 "operator_dashboard_external_assets": False,
                 "operator_dashboard_media_decode": False,
                 "operator_dashboard_destructive_actions": False,
+                "operator_dashboard_charts": True,
+                "operator_dashboard_external_chart_assets": False,
+                "operator_dashboard_client_side_chart_library": False,
             },
         }
 

@@ -1150,3 +1150,38 @@ Validation command:
 ./native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase17_evidence_rebuild_selftest.sh
 python -m pytest -q tests/test_node1_evidence_index_rebuild_phase17.py
 ```
+
+## Phase 18 — richer operator dashboard charts
+
+Phase 18 turns the Phase 15 read-only operator dashboard into a more useful
+operator UI by adding local chart-ready facts and inline charts.
+
+The chart model is derived only from persisted SQLite rows:
+
+```text
+evidence_pipeline_profiles
+  -> profile chart points
+  -> fingerprint composition
+  -> selected-profile latency breakdown
+  -> selected-profile key-moment timeline
+  -> selected-profile nearest-Hamming sample
+
+evidence_retention_runs / evidence_retention_scheduler_runs / evidence_index_rebuild_runs
+  -> operation audit chart
+```
+
+The implementation intentionally avoids external dashboard dependencies. The
+HTML dashboard uses inline CSS and SVG only. The API returns plain JSON facts
+under `charts`, so it remains easy to test, serialize, and later feed into a
+Grafana or richer UI layer.
+
+Validation:
+
+```bash
+./native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase18_operator_dashboard_charts_selftest.sh
+python -m pytest -q tests/test_node1_operator_dashboard_charts_phase17.py
+```
+
+This is still a local facts-only UI. It does not decode media, rerun native
+analysis, upload frames, infer identity/intent/speech content, or execute
+retention/rebuild actions from the dashboard page.
