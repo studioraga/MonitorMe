@@ -331,6 +331,59 @@ def cmd_evidence_key_moments(args: argparse.Namespace) -> int:
     return 0
 
 
+def _retention_kwargs(args: argparse.Namespace) -> dict[str, object]:
+    return {
+        "older_than_days": args.older_than_days,
+        "keep_last_per_camera": args.keep_last_per_camera,
+        "keep_last_per_session": args.keep_last_per_session,
+        "profile_id": args.profile_id,
+        "session_id": args.session_id,
+        "camera_id": args.camera_id,
+        "limit": args.limit,
+    }
+
+
+def cmd_evidence_retention_plan(args: argparse.Namespace) -> int:
+    db = _db(args)
+    result = db.plan_evidence_index_retention(**_retention_kwargs(args))
+    print(json.dumps(result, indent=2, sort_keys=True))
+    db.close()
+    return 0
+
+
+def cmd_evidence_retention_apply(args: argparse.Namespace) -> int:
+    if not args.dry_run and not args.yes:
+        print(json.dumps({
+            "ok": False,
+            "error": "Refusing to apply retention without --yes. Use --dry-run or pass --yes.",
+            "schema": "monitorme.evidence_index_retention_result.v0.1",
+        }, indent=2, sort_keys=True))
+        return 2
+    db = _db(args)
+    result = db.apply_evidence_index_retention(
+        dry_run=args.dry_run,
+        compact=not args.no_compact,
+        vacuum=args.vacuum,
+        **_retention_kwargs(args),
+    )
+    print(json.dumps(result, indent=2, sort_keys=True))
+    db.close()
+    return 0 if result.get("ok") else 3
+
+
+def cmd_evidence_retention_runs(args: argparse.Namespace) -> int:
+    db = _db(args)
+    result = db.list_evidence_retention_runs(
+        run_id=args.run_id,
+        dry_run=args.dry_run,
+        status=args.status,
+        limit=args.limit,
+    )
+    print(json.dumps({"evidence_retention_runs": result, "count": len(result)}, indent=2, sort_keys=True))
+    db.close()
+    return 0
+
+
 def cmd_ask(args: argparse.Namespace) -> int:
     db = _db(args)
     assistant = MonitorMeAssistant(db)
@@ -657,6 +710,37 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--camera-id")
     p.add_argument("--limit", type=int, default=50)
     p.set_defaults(func=cmd_evidence_key_moments)
+
+    p = sub.add_parser("evidence-retention-plan", help="Plan facts-only evidence index retention without deleting rows")
+    p.add_argument("--older-than-days", type=int)
+    p.add_argument("--keep-last-per-camera", type=int, default=1)
+    p.add_argument("--keep-last-per-session", type=int, default=1)
+    p.add_argument("--profile-id")
+    p.add_argument("--session-id")
+    p.add_argument("--camera-id")
+    p.add_argument("--limit", type=int, default=1000)
+    p.set_defaults(func=cmd_evidence_retention_plan)
+
+    p = sub.add_parser("evidence-retention-apply", help="Apply or dry-run facts-only evidence index retention")
+    p.add_argument("--older-than-days", type=int)
+    p.add_argument("--keep-last-per-camera", type=int, default=1)
+    p.add_argument("--keep-last-per-session", type=int, default=1)
+    p.add_argument("--profile-id")
+    p.add_argument("--session-id")
+    p.add_argument("--camera-id")
+    p.add_argument("--limit", type=int, default=1000)
+    p.add_argument("--dry-run", action="store_true", help="Record a dry-run retention run without deleting rows")
+    p.add_argument("--yes", action="store_true", help="Required for non-dry-run deletion")
+    p.add_argument("--no-compact", action="store_true", help="Skip WAL checkpoint compaction")
+    p.add_argument("--vacuum", action="store_true", help="Run SQLite VACUUM after deleting rows")
+    p.set_defaults(func=cmd_evidence_retention_apply)
+
+    p = sub.add_parser("evidence-retention-runs", help="List evidence index retention dry-run/apply records")
+    p.add_argument("--run-id")
+    p.add_argument("--dry-run", action="store_true", default=None)
+    p.add_argument("--status")
+    p.add_argument("--limit", type=int, default=50)
+    p.set_defaults(func=cmd_evidence_retention_runs)
 
     p = sub.add_parser("ask", help="Ask a DB-grounded MonitorMe question")
     p.add_argument("question")

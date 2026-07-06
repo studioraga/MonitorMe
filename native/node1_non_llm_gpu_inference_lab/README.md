@@ -597,3 +597,22 @@ Validation:
 ```
 
 The API routes return facts-only evidence summaries, fingerprints, duplicate groups, and key moments. They do not decode media in the API request path and do not emit semantic identity, speech, behavior, intent, weapon, danger, or suspiciousness claims.
+
+### Phase 14 — Evidence index retention / compaction policies
+
+Phase 14 is a MonitorMe DB/API policy layer on top of the Phase 12 evidence index. It does not add a CUDA kernel. It adds deterministic retention planning, dry-run/apply execution, WAL checkpoint compaction, optional SQLite `VACUUM`, and retention run history.
+
+The policy deletes only normalized evidence index rows and keeps the original capture/event/artifact evidence intact. This means the lightweight query index can be compacted while preserving the ability to rebuild it from retained evidence artifacts later.
+
+Validate:
+
+```bash
+native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase14_evidence_retention_selftest.sh
+```
+
+Expected:
+
+```text
+node1_non_llm_gpu_lab_selftest PASS
+node1_non_llm_gpu_lab Phase 14 Evidence Index Retention selftest PASS
+```

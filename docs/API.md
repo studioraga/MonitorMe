@@ -229,3 +229,45 @@ It does not decode media in the API request path.
 It does not upload raw frames.
 It does not infer person identity, speech content, behavior, intent, weapons, danger, or suspiciousness.
 ```
+
+## Evidence index retention API
+
+Phase 14 exposes local-only retention and compaction controls for the persisted evidence index. These routes operate on normalized SQLite index rows and do not delete raw media, source events, capture artifacts, manifests, or profile JSON artifacts.
+
+Routes:
+
+```text
+GET  /evidence/pipeline/retention/plan
+POST /evidence/pipeline/retention/apply
+GET  /evidence/pipeline/retention/runs
+```
+
+Plan example:
+
+```bash
+curl -sS 'http://127.0.0.1:8088/evidence/pipeline/retention/plan?older_than_days=30&keep_last_per_camera=1&keep_last_per_session=1' \
+  | python3 -m json.tool
+```
+
+Dry-run apply example:
+
+```bash
+curl -sS -X POST 'http://127.0.0.1:8088/evidence/pipeline/retention/apply?dry_run=true&older_than_days=30' \
+  | python3 -m json.tool
+```
+
+Real apply requires `confirm=true` when `dry_run=false`:
+
+```bash
+curl -sS -X POST 'http://127.0.0.1:8088/evidence/pipeline/retention/apply?dry_run=false&confirm=true&older_than_days=30&keep_last_per_camera=1&keep_last_per_session=1&vacuum=true' \
+  | python3 -m json.tool
+```
+
+Run history:
+
+```bash
+curl -sS 'http://127.0.0.1:8088/evidence/pipeline/retention/runs?limit=20' \
+  | python3 -m json.tool
+```
+
+The response records whether source events, capture artifacts, and keyframe files are retained. Retention is facts-only and does not perform media decode in the API request path.

@@ -1060,3 +1060,66 @@ Validation:
 native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase13_evidence_api_selftest.sh
 python -m pytest -q tests/test_node1_evidence_api_phase13.py
 ```
+
+### Phase 14 — Evidence index retention / compaction policies
+
+Phase 14 adds retention and compaction controls for the persisted evidence index introduced in Phase 12 and exposed through the Phase 13 API. The policy layer prunes only normalized evidence-index rows:
+
+- `evidence_pipeline_profiles`
+- `evidence_fingerprints`
+- `evidence_dedup_groups`
+- `evidence_key_moments`
+
+It deliberately does **not** delete source events, capture sessions, artifact rows, keyframe JPEGs, capture manifests, evidence CSV manifests, or evidence profile JSON artifacts. The goal is to keep the query index bounded while preserving the original local evidence trail for audit/rebuild.
+
+The migration `006_evidence_index_retention.sql` adds `evidence_retention_runs`, which records every dry-run/apply operation with policy JSON, selected profile counts, child-row counts, estimated index payload size, compaction flags, and DB size before/after.
+
+CLI usage:
+
+```bash
+python -m monitor_me.cli evidence-retention-plan \
+  --older-than-days 30 \
+  --keep-last-per-camera 1 \
+  --keep-last-per-session 1 \
+  --camera-id c922_node1_gate
+
+python -m monitor_me.cli evidence-retention-apply \
+  --dry-run \
+  --older-than-days 30 \
+  --keep-last-per-camera 1 \
+  --keep-last-per-session 1
+
+python -m monitor_me.cli evidence-retention-apply \
+  --yes \
+  --older-than-days 30 \
+  --keep-last-per-camera 1 \
+  --keep-last-per-session 1 \
+  --vacuum
+
+python -m monitor_me.cli evidence-retention-runs --limit 20
+```
+
+API usage:
+
+```bash
+curl -sS 'http://127.0.0.1:8088/evidence/pipeline/retention/plan?older_than_days=30&keep_last_per_camera=1&keep_last_per_session=1' | python3 -m json.tool
+curl -sS -X POST 'http://127.0.0.1:8088/evidence/pipeline/retention/apply?dry_run=true&older_than_days=30' | python3 -m json.tool
+curl -sS -X POST 'http://127.0.0.1:8088/evidence/pipeline/retention/apply?dry_run=false&confirm=true&older_than_days=30' | python3 -m json.tool
+curl -sS 'http://127.0.0.1:8088/evidence/pipeline/retention/runs?limit=20' | python3 -m json.tool
+```
+
+Safety contract:
+
+- retention is local-only
+- retention deletes index rows only
+- retention does not decode media
+- retention does not upload frames
+- retention does not create semantic claims
+- retention keeps events/artifacts/files intact so the index can be rebuilt later
+
+Validate Phase 14:
+
+```bash
+native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase14_evidence_retention_selftest.sh
+python -m pytest -q tests/test_node1_evidence_retention_phase14.py
+```

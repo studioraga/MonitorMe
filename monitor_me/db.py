@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -1213,6 +1214,334 @@ class MonitorMeDB:
             if camera_id:
                 sql += " AND camera_id=?"; args.append(camera_id)
             sql += " ORDER BY profile_id, rank LIMIT ?"; args.append(int(limit))
+            return self._decode_rows(self.conn.execute(sql, args))
+
+    @staticmethod
+    def _parse_iso_datetime(value: str | None) -> datetime | None:
+        if not value:
+            return None
+        try:
+            dt = datetime.fromisoformat(str(value))
+        except ValueError:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+
+    def _db_total_size_bytes(self) -> int:
+        total = 0
+        for suffix in ("", "-wal", "-shm"):
+            path = Path(str(self.db_path) + suffix)
+            try:
+                if path.exists() and path.is_file():
+                    total += int(path.stat().st_size)
+            except OSError:
+                pass
+        return total
+
+    def _selected_evidence_index_counts(self, profile_ids: list[str]) -> dict[str, int]:
+        if not profile_ids:
+            return {
+                "profiles": 0,
+                "fingerprints": 0,
+                "dedup_groups": 0,
+                "key_moments": 0,
+                "index_payload_bytes_estimate": 0,
+            }
+        placeholders = ",".join("?" for _ in profile_ids)
+        fp = self.conn.execute(
+            f"SELECT COUNT(*) AS c, COALESCE(SUM(LENGTH(COALESCE(histogram_json,'')) + LENGTH(COALESCE(ahash64,'')) + LENGTH(COALESCE(dhash64,'')) + LENGTH(COALESCE(fingerprint64,'')) + LENGTH(COALESCE(fingerprint_hex,''))),0) AS b FROM evidence_fingerprints WHERE profile_id IN ({placeholders})",
+            profile_ids,
+        ).fetchone()
+        dg = self.conn.execute(
+            f"SELECT COUNT(*) AS c, COALESCE(SUM(LENGTH(COALESCE(clip_ids_json,'')) + LENGTH(COALESCE(clip_indices_json,''))),0) AS b FROM evidence_dedup_groups WHERE profile_id IN ({placeholders})",
+            profile_ids,
+        ).fetchone()
+        km = self.conn.execute(
+            f"SELECT COUNT(*) AS c FROM evidence_key_moments WHERE profile_id IN ({placeholders})",
+            profile_ids,
+        ).fetchone()
+        prof = self.conn.execute(
+            f"SELECT COUNT(*) AS c, COALESCE(SUM(LENGTH(COALESCE(timeline_json,'')) + LENGTH(COALESCE(latency_json,'')) + LENGTH(COALESCE(safety_json,''))),0) AS b FROM evidence_pipeline_profiles WHERE profile_id IN ({placeholders})",
+            profile_ids,
+        ).fetchone()
+        return {
+            "profiles": int(prof["c"] or 0),
+            "fingerprints": int(fp["c"] or 0),
+            "dedup_groups": int(dg["c"] or 0),
+            "key_moments": int(km["c"] or 0),
+            "index_payload_bytes_estimate": int(prof["b"] or 0) + int(fp["b"] or 0) + int(dg["b"] or 0),
+        }
+
+    def plan_evidence_index_retention(
+        self,
+        *,
+        older_than_days: int | None = None,
+        keep_last_per_camera: int = 1,
+        keep_last_per_session: int = 1,
+        profile_id: str | None = None,
+        session_id: str | None = None,
+        camera_id: str | None = None,
+        limit: int = 1000,
+        now: str | None = None,
+    ) -> dict[str, Any]:
+        """Plan a facts-only evidence-index retention operation without deleting data.
+
+        The policy prunes only normalized evidence index rows. Source events,
+        capture artifacts, keyframe files, manifests, and profile JSON artifacts
+        remain intact and auditable.
+        """
+        with self._lock:
+            safe_limit = max(1, min(int(limit), 100000))
+            keep_last_per_camera = max(0, int(keep_last_per_camera))
+            keep_last_per_session = max(0, int(keep_last_per_session))
+            now_dt = self._parse_iso_datetime(now) or datetime.now(timezone.utc).astimezone()
+            cutoff_dt: datetime | None = None
+            cutoff_at: str | None = None
+            if older_than_days is not None:
+                cutoff_dt = now_dt - timedelta(days=max(0, int(older_than_days)))
+                cutoff_at = cutoff_dt.isoformat(timespec="seconds")
+
+            profiles = self.list_evidence_profiles(
+                profile_id=profile_id,
+                session_id=session_id,
+                camera_id=camera_id,
+                limit=safe_limit,
+            )
+            by_camera: dict[str, int] = {}
+            by_session: dict[str, int] = {}
+            protected: set[str] = set()
+            for profile in profiles:
+                pid = str(profile.get("profile_id") or "")
+                cam = str(profile.get("camera_id") or "")
+                sess = str(profile.get("session_id") or "")
+                if cam:
+                    seen = by_camera.get(cam, 0)
+                    if seen < keep_last_per_camera:
+                        protected.add(pid)
+                    by_camera[cam] = seen + 1
+                if sess:
+                    seen = by_session.get(sess, 0)
+                    if seen < keep_last_per_session:
+                        protected.add(pid)
+                    by_session[sess] = seen + 1
+
+            selected: list[dict[str, Any]] = []
+            explicit_scope_without_age = bool(profile_id or session_id) and cutoff_dt is None
+            for profile in profiles:
+                pid = str(profile.get("profile_id") or "")
+                created_dt = self._parse_iso_datetime(str(profile.get("created_at") or ""))
+                age_match = bool(cutoff_dt and created_dt and created_dt < cutoff_dt)
+                explicit_match = bool(explicit_scope_without_age)
+                if (age_match or explicit_match) and pid not in protected:
+                    selected.append(profile)
+
+            profile_ids = [str(p.get("profile_id")) for p in selected if p.get("profile_id")]
+            counts = self._selected_evidence_index_counts(profile_ids)
+            selected_summaries = [
+                {
+                    "profile_id": p.get("profile_id"),
+                    "event_id": p.get("event_id"),
+                    "session_id": p.get("session_id"),
+                    "camera_id": p.get("camera_id"),
+                    "created_at": p.get("created_at"),
+                    "fingerprint_count": int(p.get("fingerprint_count") or 0),
+                    "key_moment_count": int(p.get("key_moment_count") or 0),
+                    "facts_only": bool(p.get("facts_only", 1)),
+                    "safety_ok": bool(p.get("safety_ok")),
+                }
+                for p in selected
+            ]
+            return {
+                "ok": True,
+                "schema": "monitorme.evidence_index_retention_plan.v0.1",
+                "policy": {
+                    "older_than_days": older_than_days,
+                    "cutoff_at": cutoff_at,
+                    "keep_last_per_camera": keep_last_per_camera,
+                    "keep_last_per_session": keep_last_per_session,
+                    "profile_id": profile_id,
+                    "session_id": session_id,
+                    "camera_id": camera_id,
+                    "limit": safe_limit,
+                    "delete_scope": "evidence_index_rows_only",
+                },
+                "profiles_scanned": len(profiles),
+                "profiles_selected": len(profile_ids),
+                "profile_ids": profile_ids,
+                "selected_profiles": selected_summaries,
+                "rows_selected": counts,
+                "index_payload_bytes_estimate": counts["index_payload_bytes_estimate"],
+                "retains_source_events": True,
+                "retains_capture_artifacts": True,
+                "retains_keyframe_files": True,
+                "facts_only": True,
+                "privacy": {
+                    "external_upload": False,
+                    "raw_frame_upload": False,
+                    "media_decode": False,
+                    "semantic_claims": False,
+                },
+            }
+
+    def apply_evidence_index_retention(
+        self,
+        *,
+        dry_run: bool = True,
+        older_than_days: int | None = None,
+        keep_last_per_camera: int = 1,
+        keep_last_per_session: int = 1,
+        profile_id: str | None = None,
+        session_id: str | None = None,
+        camera_id: str | None = None,
+        limit: int = 1000,
+        compact: bool = True,
+        vacuum: bool = False,
+    ) -> dict[str, Any]:
+        """Apply or dry-run an evidence-index retention policy.
+
+        Deletion is intentionally limited to evidence_pipeline_profiles and its
+        child evidence index tables. It does not remove source events, artifact
+        rows, keyframe files, manifests, or JSON profile artifacts.
+        """
+        with self._lock:
+            plan = self.plan_evidence_index_retention(
+                older_than_days=older_than_days,
+                keep_last_per_camera=keep_last_per_camera,
+                keep_last_per_session=keep_last_per_session,
+                profile_id=profile_id,
+                session_id=session_id,
+                camera_id=camera_id,
+                limit=limit,
+            )
+            run_id = new_id("eret")
+            now = now_iso()
+            db_size_before = self._db_total_size_bytes()
+            profile_ids = list(plan.get("profile_ids") or [])
+            status = "dry_run" if dry_run else "completed"
+            error: str | None = None
+            wal_checkpoint = 0
+            vacuum_completed = 0
+            try:
+                if not dry_run and profile_ids:
+                    placeholders = ",".join("?" for _ in profile_ids)
+                    self.conn.execute(
+                        f"DELETE FROM evidence_pipeline_profiles WHERE profile_id IN ({placeholders})",
+                        profile_ids,
+                    )
+                    self.conn.commit()
+                if compact:
+                    try:
+                        self.conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                        wal_checkpoint = 1
+                    except sqlite3.DatabaseError:
+                        wal_checkpoint = 0
+                if (not dry_run) and vacuum:
+                    try:
+                        self.conn.execute("VACUUM")
+                        vacuum_completed = 1
+                    except sqlite3.DatabaseError as exc:
+                        error = str(exc)
+                        status = "completed_with_compaction_error"
+            except Exception as exc:  # pragma: no cover - defensive status capture
+                self.conn.rollback()
+                status = "error"
+                error = str(exc)
+            db_size_after = self._db_total_size_bytes()
+            row_counts = plan.get("rows_selected") or {}
+            self.conn.execute(
+                """
+                INSERT INTO evidence_retention_runs(
+                    run_id, dry_run, status, policy_json, cutoff_at, profiles_scanned,
+                    profiles_selected, fingerprints_selected, dedup_groups_selected,
+                    key_moments_selected, index_payload_bytes_estimate, db_size_before_bytes,
+                    db_size_after_bytes, wal_checkpoint, vacuum_requested, vacuum_completed,
+                    selected_profiles_json, error, created_at, completed_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    run_id,
+                    1 if dry_run else 0,
+                    status,
+                    self._json(plan.get("policy") or {}),
+                    (plan.get("policy") or {}).get("cutoff_at"),
+                    int(plan.get("profiles_scanned") or 0),
+                    int(plan.get("profiles_selected") or 0),
+                    int(row_counts.get("fingerprints") or 0),
+                    int(row_counts.get("dedup_groups") or 0),
+                    int(row_counts.get("key_moments") or 0),
+                    int(plan.get("index_payload_bytes_estimate") or 0),
+                    db_size_before,
+                    db_size_after,
+                    wal_checkpoint,
+                    1 if vacuum else 0,
+                    vacuum_completed,
+                    self._json(plan.get("selected_profiles") or []),
+                    error,
+                    now,
+                    now_iso(),
+                ),
+            )
+            self.conn.commit()
+            result = {
+                "ok": status != "error",
+                "schema": "monitorme.evidence_index_retention_result.v0.1",
+                "run_id": run_id,
+                "dry_run": bool(dry_run),
+                "status": status,
+                "plan": plan,
+                "deleted": {
+                    "profiles": 0 if dry_run else int(plan.get("profiles_selected") or 0),
+                    "fingerprints": 0 if dry_run else int(row_counts.get("fingerprints") or 0),
+                    "dedup_groups": 0 if dry_run else int(row_counts.get("dedup_groups") or 0),
+                    "key_moments": 0 if dry_run else int(row_counts.get("key_moments") or 0),
+                },
+                "compaction": {
+                    "compact_requested": bool(compact),
+                    "wal_checkpoint": bool(wal_checkpoint),
+                    "vacuum_requested": bool(vacuum),
+                    "vacuum_completed": bool(vacuum_completed),
+                    "db_size_before_bytes": db_size_before,
+                    "db_size_after_bytes": db_size_after,
+                },
+                "retains_source_events": True,
+                "retains_capture_artifacts": True,
+                "retains_keyframe_files": True,
+                "error": error,
+            }
+            self.audit(
+                "evidence_index.retention",
+                outcome=status,
+                camera_id=camera_id,
+                session_id=session_id,
+                details={
+                    "run_id": run_id,
+                    "dry_run": bool(dry_run),
+                    "profiles_selected": int(plan.get("profiles_selected") or 0),
+                    "profiles_deleted": result["deleted"]["profiles"],
+                    "delete_scope": "evidence_index_rows_only",
+                },
+            )
+            return result
+
+    def list_evidence_retention_runs(
+        self,
+        *,
+        run_id: str | None = None,
+        dry_run: bool | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        with self._lock:
+            sql = "SELECT * FROM evidence_retention_runs WHERE 1=1"
+            args: list[Any] = []
+            if run_id:
+                sql += " AND run_id=?"; args.append(run_id)
+            if dry_run is not None:
+                sql += " AND dry_run=?"; args.append(1 if dry_run else 0)
+            if status:
+                sql += " AND status=?"; args.append(status)
+            sql += " ORDER BY created_at DESC LIMIT ?"; args.append(max(1, min(int(limit), 1000)))
             return self._decode_rows(self.conn.execute(sql, args))
 
     def create_feedback(self, event_id: str, *, label: str, reason: str = "", operator: str = "operator") -> str:

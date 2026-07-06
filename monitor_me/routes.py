@@ -110,6 +110,9 @@ def create_app(db_path: str | None = None):
                 "evidence_pipeline_profile_fingerprints": "GET /evidence/pipeline/profiles/{profile_id}/fingerprints",
                 "evidence_pipeline_profile_dedup_groups": "GET /evidence/pipeline/profiles/{profile_id}/dedup-groups",
                 "evidence_pipeline_profile_key_moments": "GET /evidence/pipeline/profiles/{profile_id}/key-moments",
+                "evidence_pipeline_retention_plan": "GET /evidence/pipeline/retention/plan",
+                "evidence_pipeline_retention_apply": "POST /evidence/pipeline/retention/apply",
+                "evidence_pipeline_retention_runs": "GET /evidence/pipeline/retention/runs",
                 "ask": "POST /assistant/ask",
                 "assistant_summary": "POST /assistant/events/{event_id}/summary",
                 "assistant_summaries": "GET /assistant/summaries",
@@ -145,6 +148,8 @@ def create_app(db_path: str | None = None):
                 "evidence_pipeline_api_summaries": True,
                 "evidence_pipeline_api_media_decode": False,
                 "evidence_pipeline_api_external_upload": False,
+                "evidence_index_retention_rows_only": True,
+                "evidence_index_retention_deletes_media": False,
             },
         }
 
@@ -356,6 +361,71 @@ def create_app(db_path: str | None = None):
             "schema": "monitorme.api.evidence_pipeline_key_moments.v0.1",
             "profile_id": profile_id,
             "evidence_key_moments": items,
+            "count": len(items),
+            "privacy": {"external_upload": False, "media_decode_in_api": False, "facts_only": True},
+        }
+
+    @app.get("/evidence/pipeline/retention/plan")
+    def evidence_pipeline_retention_plan(
+        older_than_days: int | None = None,
+        keep_last_per_camera: int = 1,
+        keep_last_per_session: int = 1,
+        profile_id: str | None = None,
+        session_id: str | None = None,
+        camera_id: str | None = None,
+        limit: int = 1000,
+    ) -> dict[str, Any]:
+        return db.plan_evidence_index_retention(
+            older_than_days=older_than_days,
+            keep_last_per_camera=keep_last_per_camera,
+            keep_last_per_session=keep_last_per_session,
+            profile_id=profile_id,
+            session_id=session_id,
+            camera_id=camera_id,
+            limit=limit,
+        )
+
+    @app.post("/evidence/pipeline/retention/apply")
+    def evidence_pipeline_retention_apply(
+        dry_run: bool = True,
+        confirm: bool = False,
+        older_than_days: int | None = None,
+        keep_last_per_camera: int = 1,
+        keep_last_per_session: int = 1,
+        profile_id: str | None = None,
+        session_id: str | None = None,
+        camera_id: str | None = None,
+        limit: int = 1000,
+        compact: bool = True,
+        vacuum: bool = False,
+    ) -> dict[str, Any]:
+        if not dry_run and not confirm:
+            raise HTTPException(status_code=400, detail="confirm=true is required when dry_run=false")
+        return db.apply_evidence_index_retention(
+            dry_run=dry_run,
+            older_than_days=older_than_days,
+            keep_last_per_camera=keep_last_per_camera,
+            keep_last_per_session=keep_last_per_session,
+            profile_id=profile_id,
+            session_id=session_id,
+            camera_id=camera_id,
+            limit=limit,
+            compact=compact,
+            vacuum=vacuum,
+        )
+
+    @app.get("/evidence/pipeline/retention/runs")
+    def evidence_pipeline_retention_runs(
+        run_id: str | None = None,
+        dry_run: bool | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        items = db.list_evidence_retention_runs(run_id=run_id, dry_run=dry_run, status=status, limit=limit)
+        return {
+            "ok": True,
+            "schema": "monitorme.api.evidence_index_retention_runs.v0.1",
+            "evidence_retention_runs": items,
             "count": len(items),
             "privacy": {"external_upload": False, "media_decode_in_api": False, "facts_only": True},
         }

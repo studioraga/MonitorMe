@@ -1007,3 +1007,57 @@ Validate Phase 13:
 native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase13_evidence_api_selftest.sh
 python -m pytest -q tests/test_node1_evidence_api_phase13.py
 ```
+
+### Phase 14: evidence index retention / compaction policies
+
+Phase 14 adds bounded retention controls for the persisted evidence index. The policy engine selects old evidence-index profiles according to age and keep-last guards, then deletes only normalized index rows. Original evidence remains available through source events, capture artifacts, keyframes, manifests, CSV manifests, and JSON profile artifacts.
+
+New migration:
+
+```text
+migrations/006_evidence_index_retention.sql
+```
+
+New retention run table:
+
+```text
+evidence_retention_runs
+```
+
+New CLI commands:
+
+```bash
+python -m monitor_me.cli evidence-retention-plan --older-than-days 30 --keep-last-per-camera 1 --keep-last-per-session 1
+python -m monitor_me.cli evidence-retention-apply --dry-run --older-than-days 30
+python -m monitor_me.cli evidence-retention-apply --yes --older-than-days 30 --vacuum
+python -m monitor_me.cli evidence-retention-runs --limit 20
+```
+
+New API routes:
+
+```text
+GET  /evidence/pipeline/retention/plan
+POST /evidence/pipeline/retention/apply
+GET  /evidence/pipeline/retention/runs
+```
+
+Retention/compaction contract:
+
+```text
+delete scope: evidence index rows only
+retains source events: yes
+retains capture artifacts: yes
+retains keyframe files: yes
+retains manifests/profile JSON: yes
+media decode during retention: no
+external upload: no
+semantic claims: no
+```
+
+Validate Phase 14:
+
+```bash
+native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase14_evidence_retention_selftest.sh
+python -m compileall -q monitor_me tests
+python -m pytest -q tests/test_node1_evidence_retention_phase14.py
+```
