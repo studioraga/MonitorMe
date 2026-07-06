@@ -357,3 +357,30 @@ curl -sS 'http://127.0.0.1:8088/evidence/pipeline/retention/scheduler-runs?limit
 ```
 
 A destructive scheduled retention configuration requires `confirm=true` when `dry_run=false`. The endpoint never decodes media, uploads frames, or emits semantic claims. It executes the same evidence-index-only retention path introduced in Phase 14.
+
+## Phase 17 evidence index rebuild API
+
+Phase 17 exposes local facts-only endpoints to rebuild normalized evidence
+index rows from retained artifacts. The API reads retained
+`evidence_pipeline_profile` JSON files referenced by `evidence_pipeline_indexed`
+events. It does not decode media or rerun native evidence analysis.
+
+```text
+GET  /evidence/pipeline/rebuild/plan
+POST /evidence/pipeline/rebuild/apply
+GET  /evidence/pipeline/rebuild/runs
+```
+
+Examples:
+
+```bash
+curl -sS 'http://127.0.0.1:8088/evidence/pipeline/rebuild/plan?session_id=sess_...&artifact_root=.' | python3 -m json.tool
+curl -sS -X POST 'http://127.0.0.1:8088/evidence/pipeline/rebuild/apply?dry_run=true&session_id=sess_...&artifact_root=.' | python3 -m json.tool
+curl -sS -X POST 'http://127.0.0.1:8088/evidence/pipeline/rebuild/apply?dry_run=false&confirm=true&session_id=sess_...&artifact_root=.' | python3 -m json.tool
+curl -sS 'http://127.0.0.1:8088/evidence/pipeline/rebuild/runs?limit=20' | python3 -m json.tool
+```
+
+Safety: non-dry-run rebuild writes normalized evidence-index rows only. It
+retains source events, capture artifact rows, keyframes, capture manifests,
+evidence CSV manifests, and evidence profile JSON artifacts. `replace_existing`
+requires `confirm=true`.

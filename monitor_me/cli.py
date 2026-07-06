@@ -471,6 +471,65 @@ def cmd_evidence_retention_scheduler_runs(args: argparse.Namespace) -> int:
     return 0
 
 
+
+def cmd_evidence_index_rebuild_plan(args: argparse.Namespace) -> int:
+    db = _db(args)
+    result = db.plan_evidence_index_rebuild(
+        event_id=args.event_id,
+        session_id=args.session_id,
+        camera_id=args.camera_id,
+        missing_only=not args.include_existing,
+        artifact_root=args.artifact_root,
+        limit=args.limit,
+    )
+    print(json.dumps(result, indent=2, sort_keys=True))
+    db.close()
+    return 0 if result.get("ok") else 3
+
+
+def cmd_evidence_index_rebuild_apply(args: argparse.Namespace) -> int:
+    if not args.dry_run and not args.yes:
+        print(json.dumps({
+            "ok": False,
+            "error": "Refusing to rebuild evidence index without --yes. Use --dry-run or pass --yes.",
+            "schema": "monitorme.evidence_index_rebuild_result.v0.1",
+        }, indent=2, sort_keys=True))
+        return 2
+    if args.replace_existing and not args.yes:
+        print(json.dumps({
+            "ok": False,
+            "error": "Refusing --replace-existing without --yes because existing normalized index rows may be replaced.",
+            "schema": "monitorme.evidence_index_rebuild_result.v0.1",
+        }, indent=2, sort_keys=True))
+        return 2
+    db = _db(args)
+    result = db.rebuild_evidence_index_from_artifacts(
+        dry_run=args.dry_run,
+        replace_existing=args.replace_existing,
+        event_id=args.event_id,
+        session_id=args.session_id,
+        camera_id=args.camera_id,
+        artifact_root=args.artifact_root,
+        limit=args.limit,
+    )
+    print(json.dumps(result, indent=2, sort_keys=True))
+    db.close()
+    return 0 if result.get("ok") else 3
+
+
+def cmd_evidence_index_rebuild_runs(args: argparse.Namespace) -> int:
+    db = _db(args)
+    result = db.list_evidence_index_rebuild_runs(
+        run_id=args.run_id,
+        dry_run=args.dry_run,
+        status=args.status,
+        limit=args.limit,
+    )
+    print(json.dumps({"evidence_index_rebuild_runs": result, "count": len(result)}, indent=2, sort_keys=True))
+    db.close()
+    return 0
+
+
 def cmd_ask(args: argparse.Namespace) -> int:
     db = _db(args)
     assistant = MonitorMeAssistant(db)
@@ -872,6 +931,33 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--status")
     p.add_argument("--limit", type=int, default=50)
     p.set_defaults(func=cmd_evidence_retention_scheduler_runs)
+
+    p = sub.add_parser("evidence-index-rebuild-plan", help="Plan facts-only evidence index rebuild from retained profile artifacts")
+    p.add_argument("--event-id")
+    p.add_argument("--session-id")
+    p.add_argument("--camera-id")
+    p.add_argument("--artifact-root", default=".", help="Base path for relative artifact paths, usually repo root")
+    p.add_argument("--include-existing", action="store_true", help="Also inspect events that already have persisted evidence profiles")
+    p.add_argument("--limit", type=int, default=100)
+    p.set_defaults(func=cmd_evidence_index_rebuild_plan)
+
+    p = sub.add_parser("evidence-index-rebuild-apply", help="Rebuild facts-only evidence index rows from retained profile artifacts")
+    p.add_argument("--event-id")
+    p.add_argument("--session-id")
+    p.add_argument("--camera-id")
+    p.add_argument("--artifact-root", default=".", help="Base path for relative artifact paths, usually repo root")
+    p.add_argument("--limit", type=int, default=100)
+    p.add_argument("--dry-run", action="store_true", help="Record rebuild run without writing normalized index rows")
+    p.add_argument("--yes", action="store_true", help="Required for non-dry-run rebuild writes")
+    p.add_argument("--replace-existing", action="store_true", help="Replace existing normalized evidence index rows for matching events; requires --yes")
+    p.set_defaults(func=cmd_evidence_index_rebuild_apply)
+
+    p = sub.add_parser("evidence-index-rebuild-runs", help="List evidence index rebuild run records")
+    p.add_argument("--run-id")
+    p.add_argument("--dry-run", action="store_true", default=None)
+    p.add_argument("--status")
+    p.add_argument("--limit", type=int, default=50)
+    p.set_defaults(func=cmd_evidence_index_rebuild_runs)
 
     p = sub.add_parser("ask", help="Ask a DB-grounded MonitorMe question")
     p.add_argument("question")

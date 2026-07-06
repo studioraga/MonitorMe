@@ -85,6 +85,7 @@ def build_operator_dashboard_context(
     retention_runs = db.list_evidence_retention_runs(limit=safe_retention_limit)
     retention_schedule = db.get_evidence_retention_schedule("default")
     scheduler_runs = db.list_evidence_retention_scheduler_runs(limit=safe_retention_limit)
+    rebuild_runs = db.list_evidence_index_rebuild_runs(limit=safe_retention_limit)
     profile_count = len(summaries)
     fingerprint_count = sum(_summary_count(item, "fingerprint_count") for item in summaries)
     media_fingerprint_count = sum(_summary_count(item, "media_fingerprint_count") for item in summaries)
@@ -117,6 +118,7 @@ def build_operator_dashboard_context(
             "safety_violation_count": safety_violation_count,
             "retention_run_count": len(retention_runs),
             "scheduler_run_count": len(scheduler_runs),
+            "rebuild_run_count": len(rebuild_runs),
             "retention_schedule_enabled": 1 if (retention_schedule or {}).get("enabled") else 0,
         },
         "evidence_pipeline_summaries": summaries,
@@ -125,11 +127,13 @@ def build_operator_dashboard_context(
         "retention_runs": retention_runs,
         "retention_schedule": retention_schedule,
         "retention_scheduler_runs": scheduler_runs,
+        "evidence_index_rebuild_runs": rebuild_runs,
         "links": {
             "json_data": "/operator/dashboard/data",
             "api_summaries": "/evidence/pipeline/summaries",
             "api_retention_plan": "/evidence/pipeline/retention/plan",
             "api_retention_schedule": "/evidence/pipeline/retention/schedule",
+            "api_rebuild_plan": "/evidence/pipeline/rebuild/plan",
             "docs": "/docs",
             "openapi": "/openapi.json",
         },
@@ -146,6 +150,8 @@ def build_operator_dashboard_context(
             "destructive_actions_from_dashboard": False,
             "scheduled_retention_visible": True,
             "scheduled_retention_apply_from_dashboard": False,
+            "evidence_index_rebuild_visible": True,
+            "evidence_index_rebuild_apply_from_dashboard": False,
         },
     }
 
@@ -158,6 +164,7 @@ def render_operator_dashboard_html(context: dict[str, Any]) -> str:
     retention_runs = context.get("retention_runs") or []
     retention_schedule = context.get("retention_schedule") if isinstance(context.get("retention_schedule"), dict) else {}
     scheduler_runs = context.get("retention_scheduler_runs") or []
+    rebuild_runs = context.get("evidence_index_rebuild_runs") or []
 
     def card(label: str, value: Any, note: str = "") -> str:
         return (
@@ -256,6 +263,20 @@ def render_operator_dashboard_html(context: dict[str, Any]) -> str:
         )
     scheduler_table = "".join(scheduler_rows) or '<tr><td colspan="5">No scheduler runs recorded.</td></tr>'
 
+    rebuild_rows = []
+    for run in rebuild_runs:
+        rebuild_rows.append(
+            "<tr>"
+            f"<td><code>{_e(run.get('run_id'))}</code></td>"
+            f"<td>{_e(run.get('status'))}</td>"
+            f"<td>{_e(_fmt_bool(run.get('dry_run')))}</td>"
+            f"<td>{_e(run.get('profiles_rebuilt'))}</td>"
+            f"<td>{_e(run.get('profiles_failed'))}</td>"
+            f"<td>{_e(run.get('created_at'))}</td>"
+            "</tr>"
+        )
+    rebuild_table = "".join(rebuild_rows) or '<tr><td colspan="6">No evidence index rebuild runs recorded.</td></tr>'
+
     schedule_html = (
         "<dl>"
         f"<dt>enabled</dt><dd>{_e(_fmt_bool(retention_schedule.get('enabled')))}</dd>"
@@ -319,6 +340,7 @@ def render_operator_dashboard_html(context: dict[str, Any]) -> str:
       JSON: <a href="/operator/dashboard/data">dashboard data</a> ·
       <a href="/evidence/pipeline/summaries">evidence summaries</a> ·
       <a href="/evidence/pipeline/retention/plan">retention plan</a> ·
+      <a href="/evidence/pipeline/rebuild/plan">rebuild plan</a> ·
       <a href="/docs">OpenAPI docs</a>
     </div>
     <div class="grid">
@@ -328,6 +350,7 @@ def render_operator_dashboard_html(context: dict[str, Any]) -> str:
       {card('Dedup Groups', cards.get('duplicate_group_count', 0), f"duplicate clips={cards.get('duplicate_clip_count', 0)}")}
       {card('Safety Violations', cards.get('safety_violation_count', 0), 'expected 0')}
       {card('Retention Runs', cards.get('retention_run_count', 0), 'dry-run/apply audit')}
+      {card('Rebuild Runs', cards.get('rebuild_run_count', 0), 'from retained artifacts')}
     </div>
     <section class="section">
       <h2>Evidence pipeline profiles</h2>
@@ -348,6 +371,10 @@ def render_operator_dashboard_html(context: dict[str, Any]) -> str:
     <section class="section">
       <h2>Retention run audit</h2>
       <table><thead><tr><th>Run</th><th>Status</th><th>Dry Run</th><th>Profiles Selected</th><th>Created</th></tr></thead><tbody>{retention_table}</tbody></table>
+    </section>
+    <section class="section">
+      <h2>Evidence index rebuild audit</h2>
+      <table><thead><tr><th>Run</th><th>Status</th><th>Dry Run</th><th>Profiles Rebuilt</th><th>Failed</th><th>Created</th></tr></thead><tbody>{rebuild_table}</tbody></table>
     </section>
   </main>
   <footer>MonitorMe operator dashboard · local SQLite readback · no external assets</footer>

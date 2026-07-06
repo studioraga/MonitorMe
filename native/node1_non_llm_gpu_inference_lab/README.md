@@ -652,3 +652,17 @@ python -m monitor_me.cli evidence-retention-schedule-set --enable --cadence dail
 python -m monitor_me.cli evidence-retention-schedule-run --force
 python -m monitor_me.cli evidence-retention-scheduler-runs
 ```
+
+### Phase 17 evidence index rebuild validation
+
+Phase 17 is a MonitorMe SQLite/API/CLI rebuild layer, not a CUDA workload. The
+native lab selftest script still builds the CPU native lab and runs
+`node1_non_llm_gpu_lab_selftest`, then runs the Python rebuild tests:
+
+```bash
+./native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase17_evidence_rebuild_selftest.sh
+```
+
+The rebuild restores normalized evidence-index rows from retained
+`evidence_pipeline_profile` JSON artifacts without rerunning native analysis or
+decoding media.

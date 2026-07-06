@@ -489,6 +489,13 @@ class MonitorMeDB:
             row = self.conn.execute("SELECT * FROM capture_sessions WHERE session_id=?", (session_id,)).fetchone()
             return self._decode_row(row)
 
+    def get_artifact(self, artifact_id: str | None) -> dict[str, Any] | None:
+        if not artifact_id:
+            return None
+        with self._lock:
+            row = self.conn.execute("SELECT * FROM capture_artifacts WHERE artifact_id=?", (artifact_id,)).fetchone()
+            return self._decode_row(row)
+
     def list_artifacts(self, *, session_id: str | None = None, camera_id: str | None = None, event_id: str | None = None, artifact_type: str | None = None) -> list[dict[str, Any]]:
         with self._lock:
             sql = "SELECT a.* FROM capture_artifacts a WHERE 1=1"
@@ -1214,6 +1221,393 @@ class MonitorMeDB:
             if camera_id:
                 sql += " AND camera_id=?"; args.append(camera_id)
             sql += " ORDER BY profile_id, rank LIMIT ?"; args.append(int(limit))
+            return self._decode_rows(self.conn.execute(sql, args))
+
+
+    def _resolve_retained_artifact_path(self, path_value: str | None, *, artifact_root: str | Path | None = None) -> Path | None:
+        if not path_value:
+            return None
+        raw = Path(str(path_value))
+        if raw.is_absolute():
+            return raw
+        base = Path(artifact_root or ".")
+        return base / raw
+
+    def _load_evidence_profile_artifact(
+        self,
+        profile_path: str,
+        *,
+        artifact_root: str | Path | None = None,
+    ) -> dict[str, Any]:
+        resolved = self._resolve_retained_artifact_path(profile_path, artifact_root=artifact_root)
+        if resolved is None:
+            raise ValueError("missing evidence profile artifact path")
+        if not resolved.exists() or not resolved.is_file():
+            raise FileNotFoundError(f"evidence profile artifact not found: {resolved}")
+        payload = json.loads(resolved.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("evidence profile artifact is not a JSON object")
+        result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+        evidence = result.get("evidence_pipeline") if isinstance(result.get("evidence_pipeline"), dict) else None
+        if evidence is None and isinstance(payload.get("evidence_pipeline"), dict):
+            evidence = payload.get("evidence_pipeline")
+        if evidence is None and isinstance(payload.get("result"), dict):
+            # Some tests/tools store the native evidence object directly under result.
+            evidence = payload.get("result")
+        if not isinstance(evidence, dict):
+            raise ValueError("evidence profile artifact does not contain an evidence_pipeline object")
+        if evidence.get("facts_only", True) is False:
+            raise ValueError("refusing to rebuild non-facts-only evidence pipeline artifact")
+        return {
+            "payload": payload,
+            "evidence": evidence,
+            "resolved_profile_path": str(resolved),
+        }
+
+    def _evidence_rebuild_candidates(
+        self,
+        *,
+        event_id: str | None = None,
+        session_id: str | None = None,
+        camera_id: str | None = None,
+        missing_only: bool = True,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        sql = """
+            SELECT e.*, p.profile_id AS existing_profile_id
+            FROM events e
+            LEFT JOIN evidence_pipeline_profiles p ON p.event_id = e.event_id
+            WHERE e.event_type='evidence_pipeline_indexed'
+        """
+        args: list[Any] = []
+        if event_id:
+            sql += " AND e.event_id=?"; args.append(event_id)
+        if session_id:
+            sql += " AND e.session_id=?"; args.append(session_id)
+        if camera_id:
+            sql += " AND e.camera_id=?"; args.append(camera_id)
+        if missing_only:
+            sql += " AND p.profile_id IS NULL"
+        sql += " ORDER BY e.created_at DESC LIMIT ?"; args.append(max(1, int(limit)))
+        rows = self._decode_rows(self.conn.execute(sql, args))
+        candidates: list[dict[str, Any]] = []
+        for row in rows:
+            attrs = row.get("attrs") if isinstance(row.get("attrs"), dict) else {}
+            profile_artifact_id = str(attrs.get("profile_artifact_id") or row.get("artifact_id") or "") or None
+            manifest_artifact_id = str(attrs.get("manifest_artifact_id") or "") or None
+            profile_artifact = self.get_artifact(profile_artifact_id)
+            manifest_artifact = self.get_artifact(manifest_artifact_id)
+            if manifest_artifact_id is None and row.get("session_id"):
+                manifests = self.list_artifacts(
+                    session_id=str(row.get("session_id")),
+                    camera_id=str(row.get("camera_id")),
+                    artifact_type="evidence_pipeline_manifest_csv",
+                )
+                manifest_artifact = manifests[0] if manifests else None
+                manifest_artifact_id = str(manifest_artifact.get("artifact_id")) if manifest_artifact else None
+            profile_path = str(attrs.get("profile_path") or (profile_artifact or {}).get("path") or "")
+            manifest_csv_path = str(attrs.get("manifest_csv_path") or (manifest_artifact or {}).get("path") or "")
+            candidates.append({
+                "event_id": row.get("event_id"),
+                "session_id": row.get("session_id"),
+                "camera_id": row.get("camera_id"),
+                "event_created_at": row.get("created_at"),
+                "existing_profile_id": row.get("existing_profile_id"),
+                "manifest_artifact_id": manifest_artifact_id,
+                "profile_artifact_id": profile_artifact_id,
+                "manifest_csv_path": manifest_csv_path,
+                "profile_path": profile_path,
+                "attrs": attrs,
+            })
+        return candidates
+
+    def plan_evidence_index_rebuild(
+        self,
+        *,
+        event_id: str | None = None,
+        session_id: str | None = None,
+        camera_id: str | None = None,
+        missing_only: bool = True,
+        artifact_root: str | Path | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """Plan a facts-only rebuild of evidence index rows from retained artifacts.
+
+        This reads retained evidence profile JSON artifacts only. It does not
+        decode keyframes, run native analysis, upload media, or create semantic
+        claims. Existing index rows are skipped by default.
+        """
+        with self._lock:
+            candidates = self._evidence_rebuild_candidates(
+                event_id=event_id,
+                session_id=session_id,
+                camera_id=camera_id,
+                missing_only=missing_only,
+                limit=limit,
+            )
+            selected: list[dict[str, Any]] = []
+            errors: list[dict[str, Any]] = []
+            fingerprints = 0
+            dedup_groups = 0
+            key_moments = 0
+            for item in candidates:
+                event_ref = str(item.get("event_id") or "")
+                profile_path = str(item.get("profile_path") or "")
+                try:
+                    loaded = self._load_evidence_profile_artifact(profile_path, artifact_root=artifact_root)
+                    evidence = loaded["evidence"]
+                    selected.append({
+                        "event_id": event_ref,
+                        "session_id": item.get("session_id"),
+                        "camera_id": item.get("camera_id"),
+                        "existing_profile_id": item.get("existing_profile_id"),
+                        "manifest_artifact_id": item.get("manifest_artifact_id"),
+                        "profile_artifact_id": item.get("profile_artifact_id"),
+                        "manifest_csv_path": item.get("manifest_csv_path"),
+                        "profile_path": profile_path,
+                        "resolved_profile_path": loaded.get("resolved_profile_path"),
+                        "fingerprint_count": int(evidence.get("fingerprint_count") or len(evidence.get("fingerprints") or [])),
+                        "duplicate_group_count": int(evidence.get("duplicate_group_count") or len(evidence.get("duplicate_groups") or [])),
+                        "key_moment_count": int(evidence.get("key_moment_count") or len(evidence.get("key_moments") or [])),
+                        "facts_only": bool(evidence.get("facts_only", True)),
+                        "safety_ok": bool((evidence.get("safety") if isinstance(evidence.get("safety"), dict) else {}).get("ok")),
+                    })
+                    fingerprints += int(evidence.get("fingerprint_count") or len(evidence.get("fingerprints") or []))
+                    dedup_groups += int(evidence.get("duplicate_group_count") or len(evidence.get("duplicate_groups") or []))
+                    key_moments += int(evidence.get("key_moment_count") or len(evidence.get("key_moments") or []))
+                except Exception as exc:
+                    errors.append({"event_id": event_ref, "profile_path": profile_path, "error": str(exc)})
+            return {
+                "ok": len(errors) == 0,
+                "schema": "monitorme.evidence_index_rebuild_plan.v0.1",
+                "filters": {
+                    "event_id": event_id,
+                    "session_id": session_id,
+                    "camera_id": camera_id,
+                    "missing_only": missing_only,
+                    "artifact_root": str(artifact_root or "."),
+                    "limit": int(limit),
+                },
+                "candidates_scanned": len(candidates),
+                "candidates_selected": len(selected),
+                "profiles_rebuildable": len(selected),
+                "profiles_failed": len(errors),
+                "rows_rebuildable": {
+                    "profiles": len(selected),
+                    "fingerprints": fingerprints,
+                    "dedup_groups": dedup_groups,
+                    "key_moments": key_moments,
+                },
+                "selected_events": selected,
+                "errors": errors,
+                "source_scope": {
+                    "from_retained_events": True,
+                    "from_retained_capture_artifacts": True,
+                    "from_retained_profile_json": True,
+                    "native_rerun": False,
+                    "media_decode": False,
+                },
+                "privacy": {
+                    "facts_only": True,
+                    "external_upload": False,
+                    "raw_frame_upload": False,
+                    "media_decode": False,
+                    "semantic_claims": False,
+                },
+            }
+
+    def rebuild_evidence_index_from_artifacts(
+        self,
+        *,
+        dry_run: bool = True,
+        replace_existing: bool = False,
+        event_id: str | None = None,
+        session_id: str | None = None,
+        camera_id: str | None = None,
+        artifact_root: str | Path | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        """Rebuild normalized evidence index rows from retained artifacts.
+
+        Dry-run is the safe default. Non-dry-run writes only normalized evidence
+        index rows by calling persist_evidence_pipeline_index. It does not touch
+        source events, capture artifact rows, keyframe files, manifests, or the
+        retained profile JSON artifacts.
+        """
+        with self._lock:
+            now = now_iso()
+            run_id = new_id("erbd")
+            candidates = self._evidence_rebuild_candidates(
+                event_id=event_id,
+                session_id=session_id,
+                camera_id=camera_id,
+                missing_only=not replace_existing,
+                limit=limit,
+            )
+            rebuilt: list[dict[str, Any]] = []
+            skipped: list[dict[str, Any]] = []
+            errors: list[dict[str, Any]] = []
+            fingerprints = 0
+            dedup_groups = 0
+            key_moments = 0
+            for item in candidates:
+                event_ref = str(item.get("event_id") or "")
+                existing_profile_id = item.get("existing_profile_id")
+                if existing_profile_id and not replace_existing:
+                    skipped.append({"event_id": event_ref, "reason": "existing_profile", "profile_id": existing_profile_id})
+                    continue
+                profile_path = str(item.get("profile_path") or "")
+                try:
+                    loaded = self._load_evidence_profile_artifact(profile_path, artifact_root=artifact_root)
+                    payload = loaded["payload"]
+                    evidence = loaded["evidence"]
+                    manifest_csv_path = str(item.get("manifest_csv_path") or payload.get("evidence_manifest_csv") or "")
+                    capture_manifest_rows = int(
+                        (item.get("attrs") if isinstance(item.get("attrs"), dict) else {}).get("capture_manifest_rows")
+                        or evidence.get("manifest_entries")
+                        or evidence.get("fingerprint_count")
+                        or len(evidence.get("fingerprints") or [])
+                        or 0
+                    )
+                    rebuilt_item = {
+                        "event_id": event_ref,
+                        "session_id": item.get("session_id"),
+                        "camera_id": item.get("camera_id"),
+                        "manifest_artifact_id": item.get("manifest_artifact_id"),
+                        "profile_artifact_id": item.get("profile_artifact_id"),
+                        "manifest_csv_path": manifest_csv_path,
+                        "profile_path": profile_path,
+                        "resolved_profile_path": loaded.get("resolved_profile_path"),
+                        "fingerprint_count": int(evidence.get("fingerprint_count") or len(evidence.get("fingerprints") or [])),
+                        "duplicate_group_count": int(evidence.get("duplicate_group_count") or len(evidence.get("duplicate_groups") or [])),
+                        "key_moment_count": int(evidence.get("key_moment_count") or len(evidence.get("key_moments") or [])),
+                    }
+                    if not dry_run:
+                        profile_id = self.persist_evidence_pipeline_index(
+                            event_id=event_ref,
+                            session_id=str(item.get("session_id") or "") or None,
+                            camera_id=str(item.get("camera_id") or ""),
+                            manifest_artifact_id=str(item.get("manifest_artifact_id") or "") or None,
+                            profile_artifact_id=str(item.get("profile_artifact_id") or "") or None,
+                            manifest_csv_path=manifest_csv_path,
+                            profile_path=profile_path,
+                            evidence=evidence,
+                            capture_manifest_rows=capture_manifest_rows,
+                        )
+                        rebuilt_item["profile_id"] = profile_id
+                    rebuilt.append(rebuilt_item)
+                    fingerprints += int(evidence.get("fingerprint_count") or len(evidence.get("fingerprints") or []))
+                    dedup_groups += int(evidence.get("duplicate_group_count") or len(evidence.get("duplicate_groups") or []))
+                    key_moments += int(evidence.get("key_moment_count") or len(evidence.get("key_moments") or []))
+                except Exception as exc:
+                    errors.append({"event_id": event_ref, "profile_path": profile_path, "error": str(exc)})
+            status = "dry_run" if dry_run else ("completed" if not errors else "completed_with_errors")
+            self.conn.execute(
+                """
+                INSERT INTO evidence_index_rebuild_runs(
+                    run_id, dry_run, status, filters_json, artifact_root, replace_existing,
+                    candidates_scanned, candidates_selected, profiles_rebuilt, profiles_skipped,
+                    profiles_failed, fingerprints_rebuilt, dedup_groups_rebuilt, key_moments_rebuilt,
+                    selected_events_json, errors_json, created_at, completed_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    run_id,
+                    1 if dry_run else 0,
+                    status,
+                    self._json({
+                        "event_id": event_id,
+                        "session_id": session_id,
+                        "camera_id": camera_id,
+                        "limit": int(limit),
+                    }),
+                    str(artifact_root or "."),
+                    1 if replace_existing else 0,
+                    len(candidates),
+                    len(rebuilt),
+                    0 if dry_run else len(rebuilt),
+                    len(skipped),
+                    len(errors),
+                    0 if dry_run else fingerprints,
+                    0 if dry_run else dedup_groups,
+                    0 if dry_run else key_moments,
+                    self._json(rebuilt),
+                    self._json(errors),
+                    now,
+                    now_iso(),
+                ),
+            )
+            self.conn.commit()
+            result = {
+                "ok": len(errors) == 0,
+                "schema": "monitorme.evidence_index_rebuild_result.v0.1",
+                "run_id": run_id,
+                "dry_run": dry_run,
+                "status": status,
+                "replace_existing": replace_existing,
+                "candidates_scanned": len(candidates),
+                "candidates_selected": len(rebuilt),
+                "profiles_rebuilt": 0 if dry_run else len(rebuilt),
+                "profiles_skipped": len(skipped),
+                "profiles_failed": len(errors),
+                "rows_rebuilt": {
+                    "profiles": 0 if dry_run else len(rebuilt),
+                    "fingerprints": 0 if dry_run else fingerprints,
+                    "dedup_groups": 0 if dry_run else dedup_groups,
+                    "key_moments": 0 if dry_run else key_moments,
+                },
+                "selected_events": rebuilt,
+                "skipped": skipped,
+                "errors": errors,
+                "retains_source_events": True,
+                "retains_capture_artifacts": True,
+                "retains_keyframe_files": True,
+                "retains_profile_json_artifacts": True,
+                "privacy": {
+                    "facts_only": True,
+                    "external_upload": False,
+                    "raw_frame_upload": False,
+                    "media_decode": False,
+                    "native_rerun": False,
+                    "semantic_claims": False,
+                },
+            }
+            self.audit(
+                "evidence_index.rebuild",
+                outcome=status,
+                camera_id=camera_id,
+                event_id=event_id,
+                session_id=session_id,
+                details={
+                    "run_id": run_id,
+                    "dry_run": dry_run,
+                    "replace_existing": replace_existing,
+                    "candidates_selected": len(rebuilt),
+                    "profiles_rebuilt": result["profiles_rebuilt"],
+                    "profiles_failed": len(errors),
+                    "facts_only": True,
+                },
+            )
+            return result
+
+    def list_evidence_index_rebuild_runs(
+        self,
+        *,
+        run_id: str | None = None,
+        dry_run: bool | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        with self._lock:
+            sql = "SELECT * FROM evidence_index_rebuild_runs WHERE 1=1"
+            args: list[Any] = []
+            if run_id:
+                sql += " AND run_id=?"; args.append(run_id)
+            if dry_run is not None:
+                sql += " AND dry_run=?"; args.append(1 if dry_run else 0)
+            if status:
+                sql += " AND status=?"; args.append(status)
+            sql += " ORDER BY created_at DESC LIMIT ?"; args.append(max(1, int(limit)))
             return self._decode_rows(self.conn.execute(sql, args))
 
     @staticmethod

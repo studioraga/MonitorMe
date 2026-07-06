@@ -1200,3 +1200,38 @@ scripts/run_evidence_retention_scheduler_once.sh
 ```
 
 Example systemd templates are provided under `scripts/systemd/` for a local hourly timer.
+
+### Phase 17: evidence index rebuild from retained artifacts
+
+Phase 17 adds a local rebuild path for the normalized evidence index after
+retention has pruned query rows. The rebuild reads retained
+`evidence_pipeline_indexed` events plus retained `evidence_pipeline_profile`
+JSON artifacts and repopulates `evidence_pipeline_profiles`,
+`evidence_fingerprints`, `evidence_dedup_groups`, and
+`evidence_key_moments`.
+
+The rebuild is facts-only and local-only. It does not rerun native analysis,
+decode keyframes, upload raw frames, infer identity, infer intent, inspect
+speech content, or emit semantic claims. It only rehydrates already-retained
+JSON profile facts into queryable SQLite rows.
+
+```bash
+python -m monitor_me.cli evidence-index-rebuild-plan \
+  --session-id sess_... \
+  --artifact-root .
+
+python -m monitor_me.cli evidence-index-rebuild-apply \
+  --dry-run \
+  --session-id sess_... \
+  --artifact-root .
+
+python -m monitor_me.cli evidence-index-rebuild-apply \
+  --yes \
+  --session-id sess_... \
+  --artifact-root .
+
+python -m monitor_me.cli evidence-index-rebuild-runs --limit 20
+```
+
+Use `--replace-existing --yes` only when you intentionally want to replace an
+already persisted normalized index profile for the matching retained event.

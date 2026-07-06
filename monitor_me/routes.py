@@ -119,6 +119,9 @@ def create_app(db_path: str | None = None):
                 "evidence_retention_schedule_update": "POST /evidence/pipeline/retention/schedule",
                 "evidence_retention_schedule_run": "POST /evidence/pipeline/retention/schedule/run",
                 "evidence_retention_scheduler_runs": "GET /evidence/pipeline/retention/scheduler-runs",
+                "evidence_index_rebuild_plan": "GET /evidence/pipeline/rebuild/plan",
+                "evidence_index_rebuild_apply": "POST /evidence/pipeline/rebuild/apply",
+                "evidence_index_rebuild_runs": "GET /evidence/pipeline/rebuild/runs",
                 "operator_dashboard": "GET /operator/dashboard",
                 "operator_dashboard_data": "GET /operator/dashboard/data",
                 "ask": "POST /assistant/ask",
@@ -161,6 +164,9 @@ def create_app(db_path: str | None = None):
                 "evidence_index_retention_scheduler_enabled": True,
                 "evidence_index_retention_scheduler_default_dry_run": True,
                 "evidence_index_retention_scheduler_external_upload": False,
+                "evidence_index_rebuild_from_retained_artifacts": True,
+                "evidence_index_rebuild_media_decode": False,
+                "evidence_index_rebuild_native_rerun": False,
                 "operator_dashboard_enabled": True,
                 "operator_dashboard_external_assets": False,
                 "operator_dashboard_media_decode": False,
@@ -574,6 +580,66 @@ def create_app(db_path: str | None = None):
             "evidence_retention_scheduler_runs": items,
             "count": len(items),
             "privacy": {"external_upload": False, "media_decode_in_api": False, "facts_only": True},
+        }
+
+
+    @app.get("/evidence/pipeline/rebuild/plan")
+    def evidence_pipeline_rebuild_plan(
+        event_id: str | None = None,
+        session_id: str | None = None,
+        camera_id: str | None = None,
+        include_existing: bool = False,
+        artifact_root: str = ".",
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        return db.plan_evidence_index_rebuild(
+            event_id=event_id,
+            session_id=session_id,
+            camera_id=camera_id,
+            missing_only=not include_existing,
+            artifact_root=artifact_root,
+            limit=max(1, min(int(limit), 1000)),
+        )
+
+    @app.post("/evidence/pipeline/rebuild/apply")
+    def evidence_pipeline_rebuild_apply(
+        dry_run: bool = True,
+        confirm: bool = False,
+        replace_existing: bool = False,
+        event_id: str | None = None,
+        session_id: str | None = None,
+        camera_id: str | None = None,
+        artifact_root: str = ".",
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        if not dry_run and not confirm:
+            raise HTTPException(status_code=400, detail="confirm=true is required when dry_run=false")
+        if replace_existing and not confirm:
+            raise HTTPException(status_code=400, detail="confirm=true is required when replace_existing=true")
+        return db.rebuild_evidence_index_from_artifacts(
+            dry_run=dry_run,
+            replace_existing=replace_existing,
+            event_id=event_id,
+            session_id=session_id,
+            camera_id=camera_id,
+            artifact_root=artifact_root,
+            limit=max(1, min(int(limit), 1000)),
+        )
+
+    @app.get("/evidence/pipeline/rebuild/runs")
+    def evidence_pipeline_rebuild_runs(
+        run_id: str | None = None,
+        dry_run: bool | None = None,
+        status: str | None = None,
+        limit: int = 100,
+    ) -> dict[str, Any]:
+        items = db.list_evidence_index_rebuild_runs(run_id=run_id, dry_run=dry_run, status=status, limit=max(1, min(int(limit), 1000)))
+        return {
+            "ok": True,
+            "schema": "monitorme.api.evidence_index_rebuild_runs.v0.1",
+            "evidence_index_rebuild_runs": items,
+            "count": len(items),
+            "privacy": {"external_upload": False, "media_decode_in_api": False, "native_rerun": False, "facts_only": True},
         }
 
     @app.get("/sessions/{session_id}")

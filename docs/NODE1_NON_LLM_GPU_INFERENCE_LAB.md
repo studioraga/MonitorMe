@@ -1121,3 +1121,32 @@ Validation:
 native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase16_scheduled_retention_selftest.sh
 python -m pytest -q tests/test_node1_evidence_retention_schedule_phase16.py
 ```
+
+## Phase 17 — evidence index rebuild from retained artifacts
+
+Phase 17 closes the retention loop. Phase 14 retention intentionally prunes only
+normalized query-index rows while retaining source events and evidence artifacts.
+Phase 17 rebuilds those normalized rows from retained artifacts when an operator
+needs the query index again.
+
+Source path:
+
+```text
+evidence_pipeline_indexed event
+  -> retained capture_artifacts row for evidence_pipeline_profile
+  -> evidence_pipeline_profile.json
+  -> result.evidence_pipeline
+  -> evidence_pipeline_profiles / fingerprints / dedup groups / key moments
+```
+
+The rebuild path is metadata-only. It does not run CUDA, rerun the native
+pipeline, decode images, read keyframe pixels, upload data, or create new visual
+or audio claims. It only restores the normalized SQLite projection from retained
+facts.
+
+Validation command:
+
+```bash
+./native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase17_evidence_rebuild_selftest.sh
+python -m pytest -q tests/test_node1_evidence_index_rebuild_phase17.py
+```
