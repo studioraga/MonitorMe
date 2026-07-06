@@ -4,6 +4,7 @@
 #include "node1_non_llm/isp_filters.hpp"
 #include "node1_non_llm/sparse_roi.hpp"
 #include "node1_non_llm/mixed_region.hpp"
+#include "node1_non_llm/dense_full_frame.hpp"
 
 namespace node1_non_llm {
 
@@ -43,6 +44,11 @@ SparseRoiAnalysis analyze_sparse_roi_cuda(
 MixedRegionAnalysis analyze_mixed_region_cuda(
     const std::uint8_t* gray,
     const MixedRegionConfig& cfg);
+
+DenseFullFrameAnalysis analyze_dense_full_frame_cuda(
+    const std::uint8_t* previous_gray,
+    const std::uint8_t* current_gray,
+    const DenseFullFrameConfig& cfg);
 #endif
 
 } // namespace node1_non_llm

@@ -1,6 +1,7 @@
 #include "node1_non_llm/gpu_lab_json.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <sstream>
 
@@ -456,6 +457,107 @@ std::string mixed_region_cpu_cuda_comparison_json(const MixedRegionAnalysis& cpu
     os << "\"mismatch_count\":" << mismatch_count << ",";
     os << "\"max_abs_diff\":" << max_abs_diff << ",";
     os << "\"metrics_close\":" << bool_json(metrics_close) << ",";
+    os << "\"output_mean_abs_diff\":" << output_mean_abs_diff << ",";
+    os << "\"facts_only\":true";
+    os << "}";
+    return os.str();
+}
+
+
+std::string uint64_array_256_json(const std::array<std::uint64_t, 256>& values) {
+    std::ostringstream os;
+    os << "[";
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        if (i) os << ",";
+        os << values[i];
+    }
+    os << "]";
+    return os.str();
+}
+
+std::string dense_full_frame_analysis_json(const DenseFullFrameAnalysis& a, bool include_output) {
+    std::ostringstream os;
+    os << "{";
+    os << "\"ok\":" << bool_json(a.ok) << ",";
+    os << "\"backend\":\"" << json_escape(a.backend) << "\",";
+    os << "\"schema\":\"" << json_escape(a.schema) << "\",";
+    os << "\"error\":\"" << json_escape(a.error) << "\",";
+    os << "\"width\":" << a.width << ",";
+    os << "\"height\":" << a.height << ",";
+    os << "\"pixel_threshold\":" << a.pixel_threshold << ",";
+    os << "\"pixels_processed\":" << a.pixels_processed << ",";
+    os << "\"changed_pixels\":" << a.changed_pixels << ",";
+    os << "\"changed_ratio\":" << a.changed_ratio << ",";
+    os << "\"bytes_read\":" << a.bytes_read << ",";
+    os << "\"bytes_written\":" << a.bytes_written << ",";
+    os << "\"diff_min\":" << a.diff_min << ",";
+    os << "\"diff_max\":" << a.diff_max << ",";
+    os << "\"diff_mean\":" << a.diff_mean << ",";
+    os << "\"previous_mean\":" << a.previous_mean << ",";
+    os << "\"current_mean\":" << a.current_mean << ",";
+    os << "\"lighting_delta\":" << a.lighting_delta << ",";
+    os << "\"histogram_total\":" << a.histogram_total << ",";
+    os << "\"diff_histogram\":" << uint64_array_256_json(a.diff_histogram) << ",";
+    os << "\"output_min\":" << a.output_min << ",";
+    os << "\"output_max\":" << a.output_max << ",";
+    os << "\"output_mean\":" << a.output_mean << ",";
+    os << "\"facts_only\":true,";
+    os << "\"note\":\"Dense full-frame diff/histogram/reduction/normalize workload metrics only; no object, identity, behavior, or intent claim is emitted.\",";
+    os << "\"timing\":" << stage_timing_json(a.timing);
+    if (include_output) {
+        os << ",\"normalized\":" << float_sample_vector_json(a.normalized);
+    }
+    os << "}";
+    return os.str();
+}
+
+std::string dense_full_frame_cpu_cuda_comparison_json(const DenseFullFrameAnalysis& cpu, const DenseFullFrameAnalysis& cuda) {
+    bool histogram_equal = cpu.diff_histogram == cuda.diff_histogram;
+    bool normalized_close = false;
+    double max_abs_diff = 0.0;
+    std::size_t mismatch_count = 0;
+    if (cpu.ok && cuda.ok && cpu.normalized.size() == cuda.normalized.size()) {
+        normalized_close = true;
+        for (std::size_t i = 0; i < cpu.normalized.size(); ++i) {
+            const double diff = std::abs(static_cast<double>(cpu.normalized[i]) - static_cast<double>(cuda.normalized[i]));
+            max_abs_diff = std::max(max_abs_diff, diff);
+            if (diff > 1e-7) {
+                normalized_close = false;
+                ++mismatch_count;
+            }
+        }
+    }
+    const double diff_mean_abs_diff = std::abs(cpu.diff_mean - cuda.diff_mean);
+    const double previous_mean_abs_diff = std::abs(cpu.previous_mean - cuda.previous_mean);
+    const double current_mean_abs_diff = std::abs(cpu.current_mean - cuda.current_mean);
+    const double lighting_delta_abs_diff = std::abs(cpu.lighting_delta - cuda.lighting_delta);
+    const double output_mean_abs_diff = std::abs(cpu.output_mean - cuda.output_mean);
+    const bool reductions_close = diff_mean_abs_diff <= 1e-9
+        && previous_mean_abs_diff <= 1e-9
+        && current_mean_abs_diff <= 1e-9
+        && lighting_delta_abs_diff <= 1e-9
+        && output_mean_abs_diff <= 1e-9
+        && std::abs(static_cast<double>(cpu.output_min) - static_cast<double>(cuda.output_min)) <= 1e-7
+        && std::abs(static_cast<double>(cpu.output_max) - static_cast<double>(cuda.output_max)) <= 1e-7
+        && cpu.diff_min == cuda.diff_min
+        && cpu.diff_max == cuda.diff_max
+        && cpu.changed_pixels == cuda.changed_pixels
+        && cpu.histogram_total == cuda.histogram_total;
+    std::ostringstream os;
+    os << "{";
+    os << "\"ok\":" << bool_json(cpu.ok && cuda.ok && histogram_equal && normalized_close && reductions_close) << ",";
+    os << "\"schema\":\"node1_non_llm_dense_full_frame_cpu_cuda_compare.v0.1\",";
+    os << "\"histogram_equal\":" << bool_json(histogram_equal) << ",";
+    os << "\"normalized_close\":" << bool_json(normalized_close) << ",";
+    os << "\"mismatch_count\":" << mismatch_count << ",";
+    os << "\"max_abs_diff\":" << max_abs_diff << ",";
+    os << "\"reductions_close\":" << bool_json(reductions_close) << ",";
+    os << "\"changed_pixels_equal\":" << bool_json(cpu.changed_pixels == cuda.changed_pixels) << ",";
+    os << "\"histogram_total_equal\":" << bool_json(cpu.histogram_total == cuda.histogram_total) << ",";
+    os << "\"diff_mean_abs_diff\":" << diff_mean_abs_diff << ",";
+    os << "\"previous_mean_abs_diff\":" << previous_mean_abs_diff << ",";
+    os << "\"current_mean_abs_diff\":" << current_mean_abs_diff << ",";
+    os << "\"lighting_delta_abs_diff\":" << lighting_delta_abs_diff << ",";
     os << "\"output_mean_abs_diff\":" << output_mean_abs_diff << ",";
     os << "\"facts_only\":true";
     os << "}";

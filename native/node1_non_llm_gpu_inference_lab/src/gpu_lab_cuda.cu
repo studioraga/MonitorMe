@@ -1101,4 +1101,246 @@ MixedRegionAnalysis analyze_mixed_region_cuda(
     return out;
 }
 
+
+namespace {
+
+__global__ void dense_full_frame_diff_hist_normalize_kernel(
+    const std::uint8_t* previous_gray,
+    const std::uint8_t* current_gray,
+    int total,
+    int pixel_threshold,
+    float* normalized,
+    unsigned long long* diff_histogram,
+    unsigned long long* changed_pixels,
+    unsigned long long* sum_diff,
+    unsigned long long* sum_prev,
+    unsigned long long* sum_curr,
+    int* diff_min,
+    int* diff_max,
+    int* curr_min,
+    int* curr_max) {
+
+    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= total) {
+        return;
+    }
+    const int prev = static_cast<int>(previous_gray[idx]);
+    const int curr = static_cast<int>(current_gray[idx]);
+    const int diff = abs(curr - prev);
+    normalized[idx] = static_cast<float>(curr) / 255.0f;
+    atomicAdd(&diff_histogram[diff], 1ULL);
+    if (diff > pixel_threshold) {
+        atomicAdd(changed_pixels, 1ULL);
+    }
+    atomicAdd(sum_diff, static_cast<unsigned long long>(diff));
+    atomicAdd(sum_prev, static_cast<unsigned long long>(prev));
+    atomicAdd(sum_curr, static_cast<unsigned long long>(curr));
+    atomicMin(diff_min, diff);
+    atomicMax(diff_max, diff);
+    atomicMin(curr_min, curr);
+    atomicMax(curr_max, curr);
+}
+
+} // namespace
+
+DenseFullFrameAnalysis analyze_dense_full_frame_cuda(
+    const std::uint8_t* previous_gray,
+    const std::uint8_t* current_gray,
+    const DenseFullFrameConfig& cfg) {
+
+    HostStageTimer total_timer;
+    DenseFullFrameAnalysis out;
+    out.backend = "cuda";
+    out.width = cfg.width;
+    out.height = cfg.height;
+    out.pixel_threshold = cfg.pixel_threshold;
+    out.pixels_processed = static_cast<std::uint64_t>(cfg.width) * static_cast<std::uint64_t>(cfg.height);
+    out.bytes_read = out.pixels_processed * 2U;
+    out.bytes_written = out.pixels_processed * sizeof(float) + out.diff_histogram.size() * sizeof(std::uint64_t);
+
+    std::string error;
+    if (!previous_gray || !current_gray) {
+        out.error = "previous_gray and current_gray must not be null";
+        out.timing.total_ms = total_timer.elapsed_ms();
+        return out;
+    }
+    if (!validate_dense_full_frame_config(cfg, error)) {
+        out.error = error;
+        out.timing.total_ms = total_timer.elapsed_ms();
+        return out;
+    }
+
+    const int total_pixels = cfg.width * cfg.height;
+    const std::size_t frame_bytes = static_cast<std::size_t>(total_pixels);
+    const std::size_t output_bytes = std::max<std::size_t>(1U, static_cast<std::size_t>(total_pixels) * sizeof(float));
+
+    std::uint8_t* d_prev = nullptr;
+    std::uint8_t* d_curr = nullptr;
+    float* d_normalized = nullptr;
+    unsigned long long* d_hist = nullptr;
+    unsigned long long* d_changed = nullptr;
+    unsigned long long* d_sum_diff = nullptr;
+    unsigned long long* d_sum_prev = nullptr;
+    unsigned long long* d_sum_curr = nullptr;
+    int* d_diff_min = nullptr;
+    int* d_diff_max = nullptr;
+    int* d_curr_min = nullptr;
+    int* d_curr_max = nullptr;
+
+    auto cleanup = [&]() noexcept {
+        cudaFree(d_prev);
+        cudaFree(d_curr);
+        cudaFree(d_normalized);
+        cudaFree(d_hist);
+        cudaFree(d_changed);
+        cudaFree(d_sum_diff);
+        cudaFree(d_sum_prev);
+        cudaFree(d_sum_curr);
+        cudaFree(d_diff_min);
+        cudaFree(d_diff_max);
+        cudaFree(d_curr_min);
+        cudaFree(d_curr_max);
+    };
+
+    cudaError_t err = cudaMalloc(&d_prev, frame_bytes);
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMalloc dense previous frame"); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    err = cudaMalloc(&d_curr, frame_bytes);
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMalloc dense current frame"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    err = cudaMalloc(&d_normalized, output_bytes);
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMalloc dense normalized output"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    err = cudaMalloc(&d_hist, 256U * sizeof(unsigned long long));
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMalloc dense diff histogram"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    err = cudaMalloc(&d_changed, sizeof(unsigned long long));
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMalloc dense changed counter"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    err = cudaMalloc(&d_sum_diff, sizeof(unsigned long long));
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMalloc dense diff sum"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    err = cudaMalloc(&d_sum_prev, sizeof(unsigned long long));
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMalloc dense previous sum"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    err = cudaMalloc(&d_sum_curr, sizeof(unsigned long long));
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMalloc dense current sum"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    err = cudaMalloc(&d_diff_min, sizeof(int));
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMalloc dense diff min"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    err = cudaMalloc(&d_diff_max, sizeof(int));
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMalloc dense diff max"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    err = cudaMalloc(&d_curr_min, sizeof(int));
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMalloc dense current min"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    err = cudaMalloc(&d_curr_max, sizeof(int));
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMalloc dense current max"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+
+    {
+        HostStageTimer h2d_timer;
+        err = cudaMemcpy(d_prev, previous_gray, frame_bytes, cudaMemcpyHostToDevice);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy dense previous frame"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemcpy(d_curr, current_gray, frame_bytes, cudaMemcpyHostToDevice);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy dense current frame"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemset(d_normalized, 0, output_bytes);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemset dense normalized output"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemset(d_hist, 0, 256U * sizeof(unsigned long long));
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemset dense diff histogram"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemset(d_changed, 0, sizeof(unsigned long long));
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemset dense changed counter"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemset(d_sum_diff, 0, sizeof(unsigned long long));
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemset dense diff sum"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemset(d_sum_prev, 0, sizeof(unsigned long long));
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemset dense previous sum"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemset(d_sum_curr, 0, sizeof(unsigned long long));
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemset dense current sum"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        const int init_min = 255;
+        const int init_zero = 0;
+        err = cudaMemcpy(d_diff_min, &init_min, sizeof(int), cudaMemcpyHostToDevice);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy dense diff min init"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemcpy(d_diff_max, &init_zero, sizeof(int), cudaMemcpyHostToDevice);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy dense diff max init"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemcpy(d_curr_min, &init_min, sizeof(int), cudaMemcpyHostToDevice);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy dense current min init"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemcpy(d_curr_max, &init_zero, sizeof(int), cudaMemcpyHostToDevice);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy dense current max init"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        out.timing.h2d_ms = h2d_timer.elapsed_ms();
+    }
+
+    CudaEventTimer kernel_timer;
+    if (kernel_timer.ok()) {
+        err = kernel_timer.start();
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaEventRecord dense full-frame start"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    }
+    const int threads = 256;
+    const int blocks = (total_pixels + threads - 1) / threads;
+    dense_full_frame_diff_hist_normalize_kernel<<<blocks, threads>>>(
+        d_prev, d_curr, total_pixels, cfg.pixel_threshold, d_normalized, d_hist,
+        d_changed, d_sum_diff, d_sum_prev, d_sum_curr,
+        d_diff_min, d_diff_max, d_curr_min, d_curr_max);
+    err = cudaGetLastError();
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "dense_full_frame_diff_hist_normalize_kernel launch"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    if (kernel_timer.ok()) {
+        err = kernel_timer.stop(out.timing.kernel_ms);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "dense full-frame CUDA event sync"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    } else {
+        HostStageTimer sync_timer;
+        err = cudaDeviceSynchronize();
+        out.timing.kernel_ms = sync_timer.elapsed_ms();
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "dense full-frame CUDA sync"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    }
+
+    if (cfg.collect_output) {
+        out.normalized.assign(static_cast<std::size_t>(total_pixels), 0.0f);
+    }
+    unsigned long long h_hist[256]{};
+    unsigned long long h_changed = 0ULL;
+    unsigned long long h_sum_diff = 0ULL;
+    unsigned long long h_sum_prev = 0ULL;
+    unsigned long long h_sum_curr = 0ULL;
+    int h_diff_min = 0;
+    int h_diff_max = 0;
+    int h_curr_min = 0;
+    int h_curr_max = 0;
+
+    {
+        HostStageTimer d2h_timer;
+        if (cfg.collect_output) {
+            err = cudaMemcpy(out.normalized.data(), d_normalized, static_cast<std::size_t>(total_pixels) * sizeof(float), cudaMemcpyDeviceToHost);
+            if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy dense normalized output"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        }
+        err = cudaMemcpy(h_hist, d_hist, 256U * sizeof(unsigned long long), cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy dense diff histogram"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemcpy(&h_changed, d_changed, sizeof(unsigned long long), cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy dense changed counter"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemcpy(&h_sum_diff, d_sum_diff, sizeof(unsigned long long), cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy dense diff sum"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemcpy(&h_sum_prev, d_sum_prev, sizeof(unsigned long long), cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy dense previous sum"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemcpy(&h_sum_curr, d_sum_curr, sizeof(unsigned long long), cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy dense current sum"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemcpy(&h_diff_min, d_diff_min, sizeof(int), cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy dense diff min"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemcpy(&h_diff_max, d_diff_max, sizeof(int), cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy dense diff max"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemcpy(&h_curr_min, d_curr_min, sizeof(int), cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy dense current min"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemcpy(&h_curr_max, d_curr_max, sizeof(int), cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy dense current max"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        out.timing.d2h_ms = d2h_timer.elapsed_ms();
+    }
+
+    out.ok = true;
+    out.changed_pixels = static_cast<std::uint64_t>(h_changed);
+    out.diff_min = h_diff_min;
+    out.diff_max = h_diff_max;
+    for (int i = 0; i < 256; ++i) {
+        out.diff_histogram[static_cast<std::size_t>(i)] = static_cast<std::uint64_t>(h_hist[i]);
+        out.histogram_total += static_cast<std::uint64_t>(h_hist[i]);
+    }
+    const double n = static_cast<double>(std::max(1, total_pixels));
+    out.changed_ratio = static_cast<double>(out.changed_pixels) / n;
+    out.diff_mean = static_cast<double>(h_sum_diff) / n;
+    out.previous_mean = static_cast<double>(h_sum_prev) / n;
+    out.current_mean = static_cast<double>(h_sum_curr) / n;
+    out.lighting_delta = fabs(out.current_mean - out.previous_mean);
+    out.output_min = static_cast<float>(h_curr_min) / 255.0f;
+    out.output_max = static_cast<float>(h_curr_max) / 255.0f;
+    out.output_mean = out.current_mean / 255.0;
+    out.timing.total_ms = total_timer.elapsed_ms();
+    cleanup();
+    return out;
+}
+
 } // namespace node1_non_llm

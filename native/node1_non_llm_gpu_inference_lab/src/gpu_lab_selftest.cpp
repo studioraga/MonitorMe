@@ -244,6 +244,48 @@ void test_mixed_region_cpu() {
     require(!validate_mixed_region_config(cfg, error), "invalid mixed region >32 tile config accepted");
 }
 
+
+void test_dense_full_frame_cpu() {
+    const int width = 16;
+    const int height = 8;
+    std::vector<std::uint8_t> prev(static_cast<std::size_t>(width * height), 10U);
+    std::vector<std::uint8_t> curr(static_cast<std::size_t>(width * height), 210U);
+    curr[0] = 10U;
+    curr[1] = 20U;
+
+    DenseFullFrameConfig cfg;
+    cfg.width = width;
+    cfg.height = height;
+    cfg.pixel_threshold = 30;
+    cfg.collect_output = true;
+
+    std::string error;
+    require(validate_dense_full_frame_config(cfg, error), "valid dense full-frame config rejected");
+    const auto analysis = analyze_dense_full_frame_cpu(prev.data(), curr.data(), cfg);
+    require(analysis.ok, "dense full-frame CPU analysis failed: " + analysis.error);
+    require(analysis.pixels_processed == static_cast<std::uint64_t>(width * height), "dense pixels_processed mismatch");
+    require(analysis.histogram_total == analysis.pixels_processed, "dense histogram total mismatch");
+    require(analysis.diff_histogram[0] == 1, "dense diff histogram zero bin mismatch");
+    require(analysis.diff_histogram[10] == 1, "dense diff histogram small diff bin mismatch");
+    require(analysis.diff_histogram[200] == analysis.pixels_processed - 2, "dense diff histogram 200 bin mismatch");
+    require(analysis.changed_pixels == analysis.pixels_processed - 2, "dense changed pixel mismatch");
+    require(analysis.diff_min == 0, "dense diff_min mismatch");
+    require(analysis.diff_max == 200, "dense diff_max mismatch");
+    require(analysis.lighting_delta > 190.0 && analysis.lighting_delta < 200.0, "dense lighting delta mismatch");
+    require(analysis.normalized.size() == static_cast<std::size_t>(width * height), "dense normalized output size mismatch");
+    require(std::abs(analysis.normalized[0] - (10.0f / 255.0f)) < 1e-7f, "dense normalized first value mismatch");
+    require(analysis.bytes_read == analysis.pixels_processed * 2U, "dense bytes_read mismatch");
+    require(analysis.bytes_written == analysis.pixels_processed * sizeof(float) + 256U * sizeof(std::uint64_t), "dense bytes_written mismatch");
+
+    const std::string json = dense_full_frame_analysis_json(analysis, false);
+    require(json.find("\"schema\":\"node1_non_llm_dense_full_frame.v0.1\"") != std::string::npos, "dense JSON missing schema");
+    require(json.find("\"diff_histogram\":") != std::string::npos, "dense JSON missing histogram");
+    require(json.find("\"facts_only\":true") != std::string::npos, "dense JSON missing facts_only");
+
+    cfg.width = 0;
+    require(!validate_dense_full_frame_config(cfg, error), "invalid dense width accepted");
+}
+
 void test_isp_filter_reference_equivalence() {
     const int width = 9;
     const int height = 7;
@@ -351,6 +393,7 @@ int main() {
         test_json_helpers();
         test_sparse_roi_cpu();
         test_mixed_region_cpu();
+        test_dense_full_frame_cpu();
         test_isp_filter_reference_equivalence();
         test_isp_known_values();
         test_pgm_ppm_io();

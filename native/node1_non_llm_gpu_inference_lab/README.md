@@ -336,3 +336,40 @@ The JSON emits `mixed_region` for the CPU reference path, `mixed_region_cuda`
 for the CUDA path, and `mixed_region_cpu_cuda_comparison` for parity facts. The
 module remains facts-only workload metadata; it does not claim object identity,
 behavior, intent, weapons, or suspicious activity.
+
+## Phase 5: Dense full-frame diff/histogram/reduction/normalize
+
+Phase 5 adds the dense full-frame path for high-activity frames. The path runs
+absolute frame diff, changed-pixel reduction, a 256-bin diff histogram,
+previous/current/diff mean reductions, lighting delta, and dense current-frame
+normalization to float32 `[0, 1]`.
+
+Native CPU validation:
+
+```bash
+./scripts/run_node1_gpu_lab_phase5_dense_full_frame_selftest.sh
+```
+
+Native CUDA validation after `./scripts/build_node1_gpu_lab.sh`:
+
+```bash
+./scripts/run_node1_gpu_lab_phase5_dense_full_frame_cuda_selftest.sh
+```
+
+Manual example:
+
+```bash
+./build/node1_non_llm_gpu_lab \
+  --mode dense-full-frame-synthetic \
+  --scenario dense \
+  --width 320 \
+  --height 240 \
+  --gpu \
+  --include-output
+```
+
+The JSON emits `dense_full_frame` for the CPU reference path,
+`dense_full_frame_cuda` for the CUDA path, and
+`dense_full_frame_cpu_cuda_comparison` for parity facts. The module remains
+facts-only workload metadata; it does not claim object identity, behavior,
+intent, weapons, or suspicious activity.

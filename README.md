@@ -874,3 +874,13 @@ python -m monitor_me.cli gpu-lab-mixed-region-synthetic --scenario scattered
 
 Use `MONITORME_GPU_LAB_PREFER_CUDA=1` with a CUDA-built native binary to emit
 `mixed_region_cuda` and `mixed_region_cpu_cuda_comparison`.
+
+### Node1 non-LLM GPU lab Phase 5
+
+Phase 5 adds the dense full-frame path for high-activity frames. It runs full-frame absolute difference, a 256-bin diff histogram, reductions for previous/current/diff means, lighting delta, changed-pixel counts, and dense uint8-to-float32 normalization with CPU/CUDA parity checks.
+
+```bash
+python -m monitor_me.cli gpu-lab-dense-full-frame-synthetic --scenario dense
+```
+
+Use `MONITORME_GPU_LAB_PREFER_CUDA=1` with a CUDA-built native binary to emit `dense_full_frame_cuda` and `dense_full_frame_cpu_cuda_comparison`. The dense path remains facts-only workload metadata and does not emit object, person, identity, behavior, intent, weapon, or suspiciousness claims.

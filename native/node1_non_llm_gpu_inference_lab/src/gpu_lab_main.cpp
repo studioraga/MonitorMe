@@ -145,7 +145,7 @@ std::vector<float> make_synthetic_audio(int sample_count) {
 }
 
 void print_usage() {
-    std::cerr << "node1_non_llm_gpu_lab --mode synthetic|analyze-raw-gray|audio-raw-f32|isp-synthetic|isp-pgm|sparse-roi-synthetic|mixed-region-synthetic [options]\n"
+    std::cerr << "node1_non_llm_gpu_lab --mode synthetic|analyze-raw-gray|audio-raw-f32|isp-synthetic|isp-pgm|sparse-roi-synthetic|mixed-region-synthetic|dense-full-frame-synthetic [options]\n"
               << "  --scenario sparse|mixed|dense|contiguous|scattered synthetic frame pattern\n"
               << "  --prev previous.gray --curr current.gray --width W --height H\n"
               << "  --audio samples.f32 --audio-samples N --audio-window-samples N\n"
@@ -205,6 +205,10 @@ int main(int argc, char** argv) {
             ran_frame = true;
         } else if (mode == "mixed-region-synthetic") {
             make_synthetic_frames(width, height, arg_string(args, "scenario", "contiguous"), prev, curr);
+            cpu_frame = analyze_gray_frames_cpu(prev.data(), curr.data(), tile_cfg);
+            ran_frame = true;
+        } else if (mode == "dense-full-frame-synthetic") {
+            make_synthetic_frames(width, height, arg_string(args, "scenario", "dense"), prev, curr);
             cpu_frame = analyze_gray_frames_cpu(prev.data(), curr.data(), tile_cfg);
             ran_frame = true;
         } else if (mode != "audio-raw-f32" && mode != "isp-synthetic" && mode != "isp-pgm") {
@@ -344,10 +348,31 @@ int main(int argc, char** argv) {
 #endif
         }
 
+        DenseFullFrameAnalysis cpu_dense_full_frame;
+        DenseFullFrameAnalysis gpu_dense_full_frame;
+        bool ran_dense_full_frame = false;
+        bool ran_dense_full_frame_cuda = false;
+        if (mode == "dense-full-frame-synthetic") {
+            DenseFullFrameConfig dense_cfg;
+            dense_cfg.width = width;
+            dense_cfg.height = height;
+            dense_cfg.pixel_threshold = tile_cfg.pixel_threshold;
+            dense_cfg.collect_output = true;
+            cpu_dense_full_frame = analyze_dense_full_frame_cpu(prev.data(), curr.data(), dense_cfg);
+            ran_dense_full_frame = true;
+#ifdef NODE1_NON_LLM_WITH_CUDA
+            if (has_flag(args, "gpu")) {
+                gpu_dense_full_frame = analyze_dense_full_frame_cuda(prev.data(), curr.data(), dense_cfg);
+                ran_dense_full_frame_cuda = true;
+            }
+#endif
+        }
+
 #ifndef NODE1_NON_LLM_WITH_CUDA
         (void)ran_isp_cuda;
         (void)ran_sparse_roi_cuda;
         (void)ran_mixed_region_cuda;
+        (void)ran_dense_full_frame_cuda;
 #endif
         std::ostringstream os;
         os << "{";
@@ -398,6 +423,15 @@ int main(int argc, char** argv) {
 #else
         os << ",\"mixed_region_cuda\":null";
         os << ",\"mixed_region_cpu_cuda_comparison\":null";
+#endif
+        const bool include_dense_full_frame_output = has_flag(args, "include-output");
+        os << ",\"dense_full_frame\":" << (ran_dense_full_frame ? dense_full_frame_analysis_json(cpu_dense_full_frame, include_dense_full_frame_output) : "null");
+#ifdef NODE1_NON_LLM_WITH_CUDA
+        os << ",\"dense_full_frame_cuda\":" << (ran_dense_full_frame_cuda ? dense_full_frame_analysis_json(gpu_dense_full_frame, include_dense_full_frame_output) : "null");
+        os << ",\"dense_full_frame_cpu_cuda_comparison\":" << (ran_dense_full_frame_cuda ? dense_full_frame_cpu_cuda_comparison_json(cpu_dense_full_frame, gpu_dense_full_frame) : "null");
+#else
+        os << ",\"dense_full_frame_cuda\":null";
+        os << ",\"dense_full_frame_cpu_cuda_comparison\":null";
 #endif
         if (ran_isp) {
 

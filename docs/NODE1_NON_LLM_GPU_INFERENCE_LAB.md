@@ -540,3 +540,63 @@ Supported synthetic scenarios for Phase 4 validation:
 
 The module is intentionally non-semantic. It emits only workload, grouping,
 crop-batching, and normalization facts.
+
+## Phase 5 — Dense full-frame path
+
+Phase 5 implements the dense full-frame processing path from the TASK1 roadmap.
+It is intended for high-activity frames where most tiles are active and ROI-style
+sparse processing is no longer the right memory-access pattern.
+
+Pipeline:
+
+```text
+previous/current gray frame
+  -> full-frame absolute diff
+  -> changed-pixel reduction using pixel_threshold
+  -> 256-bin diff histogram
+  -> previous/current/diff reductions
+  -> lighting delta
+  -> dense current-frame normalize to float32 [0, 1]
+  -> CPU-vs-CUDA parity facts
+```
+
+Native mode:
+
+```bash
+node1_non_llm_gpu_lab \
+  --mode dense-full-frame-synthetic \
+  --scenario dense \
+  --width 320 \
+  --height 240 \
+  --gpu \
+  --include-output
+```
+
+JSON fields:
+
+```text
+dense_full_frame                         CPU reference dense-frame result
+dense_full_frame_cuda                    CUDA dense-frame result when --gpu is used
+dense_full_frame_cpu_cuda_comparison     histogram/reduction/normalization parity facts
+```
+
+The comparison reports `histogram_equal`, `normalized_close`,
+`mismatch_count`, `max_abs_diff`, `reductions_close`, changed-pixel equality,
+and per-reduction absolute differences.
+
+Validation scripts:
+
+```bash
+native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase5_dense_full_frame_selftest.sh
+native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase5_dense_full_frame_cuda_selftest.sh
+```
+
+Supported synthetic scenarios:
+
+- `dense`: all pixels changed, dense route, one dominant diff histogram bin.
+- `mixed`: middle-region activity, mixed route, dense full-frame reductions still valid.
+- `sparse`: sparse activity, sparse route, dense full-frame reductions still valid.
+
+This module is intentionally non-semantic. It emits only workload, histogram,
+reduction, lighting, normalization, and timing facts. It does not report object
+class, person, identity, behavior, intent, weapon, or suspiciousness claims.
