@@ -235,6 +235,16 @@ def cmd_capture_run(args: argparse.Namespace) -> int:
         gpu_lab_dense_threshold=args.gpu_lab_dense_threshold,
         gpu_lab_prefer_cuda=not args.gpu_lab_no_cuda,
         gpu_lab_allow_python_fallback=not args.gpu_lab_no_python_fallback,
+        evidence_pipeline_enabled=args.evidence_pipeline_enabled,
+        evidence_pipeline_binary=args.evidence_pipeline_binary or args.gpu_lab_binary,
+        evidence_pipeline_max_batch_bytes=args.evidence_pipeline_max_batch_bytes,
+        evidence_pipeline_max_batch_clips=args.evidence_pipeline_max_batch_clips,
+        evidence_pipeline_key_moments=args.evidence_pipeline_key_moments,
+        evidence_pipeline_min_key_gap_ms=args.evidence_pipeline_min_key_gap_ms,
+        evidence_pipeline_dedup_hamming_threshold=args.evidence_pipeline_dedup_hamming_threshold,
+        evidence_pipeline_fingerprint_width=args.evidence_pipeline_fingerprint_width,
+        evidence_pipeline_fingerprint_height=args.evidence_pipeline_fingerprint_height,
+        evidence_pipeline_fingerprint_cycle=args.evidence_pipeline_fingerprint_cycle,
     )
     result = LocalCameraCaptureRunner(db, config).run().as_dict()
     print(json.dumps(result, indent=2, sort_keys=True))
@@ -527,6 +537,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--gpu-lab-dense-threshold", type=int, default=24)
     p.add_argument("--gpu-lab-no-cuda", action="store_true", help="Do not request CUDA backend from native profiler")
     p.add_argument("--gpu-lab-no-python-fallback", action="store_true", help="Do not emit Python fallback workload profile if native binary is missing")
+    p.add_argument("--evidence-pipeline-enabled", action="store_true", help="Run facts-only evidence pipeline after capture manifest/keyframes are written")
+    p.add_argument("--evidence-pipeline-binary", default="", help="Path to native node1_non_llm_gpu_lab binary for capture-run evidence pipeline; defaults to --gpu-lab-binary/native default")
+    p.add_argument("--evidence-pipeline-max-batch-bytes", type=int, default=2 * 1024 * 1024)
+    p.add_argument("--evidence-pipeline-max-batch-clips", type=int, default=4)
+    p.add_argument("--evidence-pipeline-key-moments", type=int, default=5)
+    p.add_argument("--evidence-pipeline-min-key-gap-ms", type=int, default=1000)
+    p.add_argument("--evidence-pipeline-dedup-hamming-threshold", type=int, default=0)
+    p.add_argument("--evidence-pipeline-fingerprint-width", type=int, default=16)
+    p.add_argument("--evidence-pipeline-fingerprint-height", type=int, default=16)
+    p.add_argument("--evidence-pipeline-fingerprint-cycle", type=int, default=6)
     p.set_defaults(func=cmd_capture_run)
 
     p = sub.add_parser("events", help="List normalized events")

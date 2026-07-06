@@ -514,3 +514,19 @@ Run a native synthetic example:
 ```
 
 The output is `evidence_pipeline` with `storage_batch`, `fingerprints`, `duplicate_groups`, `key_moments`, `timeline`, `latency`, and `safety`. It does not decode media and does not emit object, person, identity, speech content, behavior, intent, or suspiciousness claims.
+
+## Phase 10 — Capture-run evidence pipeline integration
+
+Phase 10 connects the native evidence pipeline to MonitorMe `capture-run` sessions through the Python bridge. The native module still runs in `evidence-pipeline-manifest` mode; the capture runner is responsible for converting local keyframe evidence into the CSV manifest contract.
+
+Validation:
+
+```bash
+./scripts/run_node1_gpu_lab_phase10_capture_evidence_pipeline_selftest.sh
+```
+
+The selftest builds the CPU native binary, runs the native selftest binary, then runs the Python capture-run integration test. Expected result:
+
+```text
+node1_non_llm_gpu_lab Phase 10 Capture-run Evidence Pipeline selftest PASS
+```

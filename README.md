@@ -938,3 +938,32 @@ python -m monitor_me.cli gpu-lab-evidence-pipeline-synthetic \
 ```
 
 The result includes `evidence_pipeline`, nested `storage_batch`, `fingerprints`, `duplicate_groups`, dedup-aware `key_moments`, `timeline`, `latency`, and `safety`. The path is facts-only and does not decode media or make object, identity, speech-content, behavior, or intent claims.
+
+### Node1 non-LLM GPU lab Phase 10
+
+Phase 10 integrates the Phase 9 evidence pipeline into real `capture-run` sessions. When `--evidence-pipeline-enabled` is used, MonitorMe converts stored local motion keyframes into a facts-only evidence CSV manifest, runs the native evidence pipeline in manifest mode, stores the JSON profile as a capture artifact, and inserts a session-level `evidence_pipeline_indexed` event.
+
+The capture-run integration remains local and metadata-only. It does not decode media through the evidence pipeline and does not emit object, person, identity, speech-content, behavior, intent, weapon, suspiciousness, or semantic audio/visual claims.
+
+Example:
+
+```bash
+python -m monitor_me.cli capture-run \
+  --camera-id c922_node1_gate \
+  --device /dev/video0 \
+  --duration-sec 10 \
+  --evidence-pipeline-enabled \
+  --evidence-pipeline-binary native/node1_non_llm_gpu_inference_lab/build-cpu/node1_non_llm_gpu_lab \
+  --evidence-pipeline-max-batch-bytes 1600000 \
+  --evidence-pipeline-max-batch-clips 3 \
+  --evidence-pipeline-key-moments 4 \
+  --evidence-pipeline-min-key-gap-ms 1000 \
+  --evidence-pipeline-dedup-hamming-threshold 0
+```
+
+Generated artifacts include:
+
+- `evidence_pipeline_manifest_csv`
+- `evidence_pipeline_profile`
+
+The final capture manifest records `evidence_pipeline_event_ids`, `evidence_pipeline_artifact_ids`, and a compact `evidence_pipeline.last_result` summary.

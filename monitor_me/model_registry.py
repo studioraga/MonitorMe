@@ -73,6 +73,18 @@ DEFAULT_MODELS = [
         },
     ),
     ModelRecord(
+        model_id="node1-non-llm-evidence-pipeline-v0.1",
+        role="native_evidence_pipeline",
+        provider="cpp-cpu-sidecar",
+        enabled=False,
+        metadata={
+            "stage": "capture-run-evidence-pipeline-integration",
+            "privacy": "Disabled by default; indexes local capture-run keyframe evidence into facts-only storage/fingerprint/dedup metadata.",
+            "facts_only": True,
+            "media_decode": False,
+        },
+    ),
+    ModelRecord(
         model_id="sam2-small",
         role="segmentation_model_future",
         provider="disabled",

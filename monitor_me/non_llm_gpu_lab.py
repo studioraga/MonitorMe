@@ -12,6 +12,8 @@ from typing import Any
 
 GPU_LAB_MODEL_ID = "node1-non-llm-gpu-lab-v0.1"
 GPU_LAB_SCHEMA = "monitorme.node1_non_llm_gpu_profile.v0.1"
+EVIDENCE_PIPELINE_MODEL_ID = "node1-non-llm-evidence-pipeline-v0.1"
+EVIDENCE_PIPELINE_SCHEMA = "monitorme.node1_evidence_pipeline_profile.v0.1"
 
 
 @dataclass(frozen=True)
@@ -508,6 +510,60 @@ class Node1NonLLMGpuLabRunner:
         result["schema"] = GPU_LAB_SCHEMA
         result["source"] = "native_binary"
         result["binary_path"] = str(binary)
+        return result
+
+
+
+    def run_evidence_pipeline_manifest(
+        self,
+        *,
+        manifest_path: str | Path,
+        max_batch_bytes: int = 2 * 1024 * 1024,
+        max_batch_clips: int = 4,
+        key_moments: int = 5,
+        min_key_gap_ms: int = 1000,
+        dedup_hamming_threshold: int = 0,
+        fingerprint_width: int = 16,
+        fingerprint_height: int = 16,
+        fingerprint_cycle: int = 6,
+    ) -> dict[str, Any]:
+        binary = self.binary_path
+        manifest = Path(manifest_path)
+        if not manifest.exists():
+            return {
+                "ok": False,
+                "schema": EVIDENCE_PIPELINE_SCHEMA,
+                "error": f"evidence manifest not found: {manifest}",
+                "manifest_path": str(manifest),
+                "binary_path": str(binary),
+            }
+        if not binary.exists():
+            return {
+                "ok": False,
+                "schema": EVIDENCE_PIPELINE_SCHEMA,
+                "error": f"native binary not found: {binary}",
+                "manifest_path": str(manifest),
+                "binary_path": str(binary),
+            }
+        cmd = [
+            str(binary),
+            "--mode", "evidence-pipeline-manifest",
+            "--manifest", str(manifest),
+            "--max-batch-bytes", str(max_batch_bytes),
+            "--max-batch-clips", str(max_batch_clips),
+            "--key-moments", str(key_moments),
+            "--min-key-gap-ms", str(min_key_gap_ms),
+            "--dedup-hamming-threshold", str(dedup_hamming_threshold),
+            "--fingerprint-width", str(fingerprint_width),
+            "--fingerprint-height", str(fingerprint_height),
+            "--fingerprint-cycle", str(fingerprint_cycle),
+            "--include-output",
+        ]
+        result = self._run_json(cmd)
+        result["schema"] = EVIDENCE_PIPELINE_SCHEMA
+        result["source"] = "native_binary"
+        result["binary_path"] = str(binary)
+        result["manifest_path"] = str(manifest)
         return result
 
     def run_isp_synthetic(self, *, filter_name: str = "sobel-mag", width: int = 64, height: int = 48) -> dict[str, Any]:

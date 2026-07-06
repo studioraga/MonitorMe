@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import time
 from collections import deque
@@ -13,7 +14,14 @@ from .hash_utils import sha256_file
 from .keyframe_vlm import KeyframeVLMAnalysisService
 from .short_clip_vlm import ShortClipVLMExperimentService
 from .model_registry import register_default_models
-from .non_llm_gpu_lab import GPU_LAB_MODEL_ID, GPU_LAB_SCHEMA, GpuLabConfig, Node1NonLLMGpuLabRunner
+from .non_llm_gpu_lab import (
+    EVIDENCE_PIPELINE_MODEL_ID,
+    EVIDENCE_PIPELINE_SCHEMA,
+    GPU_LAB_MODEL_ID,
+    GPU_LAB_SCHEMA,
+    GpuLabConfig,
+    Node1NonLLMGpuLabRunner,
+)
 from .overlays import OverlayBox, render_evidence_overlay
 from .policy import allow_node1_local_camera
 from .time_utils import now_iso
@@ -98,6 +106,22 @@ class LocalCaptureConfig:
     gpu_lab_prefer_cuda: bool = True
     gpu_lab_allow_python_fallback: bool = True
 
+    # Capture-run evidence pipeline integration. Disabled by default and runs
+    # after the bounded capture manifest has collected local keyframe evidence.
+    # It converts capture keyframes into a native evidence CSV manifest, runs
+    # the facts-only evidence pipeline, stores the resulting JSON as an
+    # artifact, and inserts a session-level evidence_pipeline_indexed event.
+    evidence_pipeline_enabled: bool = False
+    evidence_pipeline_binary: str = ""
+    evidence_pipeline_max_batch_bytes: int = 2 * 1024 * 1024
+    evidence_pipeline_max_batch_clips: int = 4
+    evidence_pipeline_key_moments: int = 5
+    evidence_pipeline_min_key_gap_ms: int = 1000
+    evidence_pipeline_dedup_hamming_threshold: int = 0
+    evidence_pipeline_fingerprint_width: int = 16
+    evidence_pipeline_fingerprint_height: int = 16
+    evidence_pipeline_fingerprint_cycle: int = 6
+
 
 @dataclass(frozen=True)
 class MotionResult:
@@ -128,6 +152,8 @@ class LocalCaptureResult:
     vlm_analysis_ids: list[str]
     smolvlm2_experiment_ids: list[str]
     gpu_profile_event_ids: list[str]
+    evidence_pipeline_event_ids: list[str]
+    evidence_pipeline_artifact_ids: list[str]
     started_at: str
     ended_at: str
     detector: dict[str, Any]
@@ -328,6 +354,27 @@ class LocalCameraCaptureRunner:
             },
             enabled=cfg.gpu_lab_enabled,
         )
+        self.db.upsert_model(
+            EVIDENCE_PIPELINE_MODEL_ID,
+            role="native_evidence_pipeline",
+            provider="cpp-cpu-sidecar",
+            path=cfg.evidence_pipeline_binary or cfg.gpu_lab_binary,
+            metadata={
+                "stage": "capture-run-evidence-pipeline-integration",
+                "privacy": "Runs locally after a bounded capture run; stores facts-only evidence metadata.",
+                "enabled_for_capture": cfg.evidence_pipeline_enabled,
+                "max_batch_bytes": int(cfg.evidence_pipeline_max_batch_bytes),
+                "max_batch_clips": int(cfg.evidence_pipeline_max_batch_clips),
+                "key_moments": int(cfg.evidence_pipeline_key_moments),
+                "min_key_gap_ms": int(cfg.evidence_pipeline_min_key_gap_ms),
+                "dedup_hamming_threshold": int(cfg.evidence_pipeline_dedup_hamming_threshold),
+                "fingerprint_shape": [int(cfg.evidence_pipeline_fingerprint_width), int(cfg.evidence_pipeline_fingerprint_height)],
+                "fingerprint_cycle": int(cfg.evidence_pipeline_fingerprint_cycle),
+                "facts_only": True,
+                "runs_after_capture_manifest": True,
+            },
+            enabled=cfg.evidence_pipeline_enabled,
+        )
         session_id = self.db.create_session(
             camera_id=cfg.camera_id,
             source_node="node1",
@@ -377,6 +424,8 @@ class LocalCameraCaptureRunner:
         vlm_analysis_ids: list[str] = []
         smolvlm2_experiment_ids: list[str] = []
         gpu_profile_event_ids: list[str] = []
+        evidence_pipeline_event_ids: list[str] = []
+        evidence_pipeline_artifact_ids: list[str] = []
         summary_service = AssistantSummaryService(self.db)
         vlm_service = KeyframeVLMAnalysisService(self.db, vlm=self.keyframe_vlm_client) if cfg.vlm_enabled else None
         smolvlm2_service = ShortClipVLMExperimentService(self.db, vlm=self.short_clip_vlm_client) if cfg.smolvlm2_enabled else None
@@ -651,6 +700,23 @@ class LocalCameraCaptureRunner:
             "vlm_analysis_ids": vlm_analysis_ids,
             "smolvlm2_experiment_ids": smolvlm2_experiment_ids,
             "gpu_profile_event_ids": gpu_profile_event_ids,
+            "evidence_pipeline_event_ids": evidence_pipeline_event_ids,
+            "evidence_pipeline_artifact_ids": evidence_pipeline_artifact_ids,
+            "evidence_pipeline": {
+                "enabled": bool(cfg.evidence_pipeline_enabled),
+                "model_id": EVIDENCE_PIPELINE_MODEL_ID,
+                "event_count": len(evidence_pipeline_event_ids),
+                "artifact_count": len(evidence_pipeline_artifact_ids),
+                "max_batch_bytes": int(cfg.evidence_pipeline_max_batch_bytes),
+                "max_batch_clips": int(cfg.evidence_pipeline_max_batch_clips),
+                "key_moments": int(cfg.evidence_pipeline_key_moments),
+                "min_key_gap_ms": int(cfg.evidence_pipeline_min_key_gap_ms),
+                "dedup_hamming_threshold": int(cfg.evidence_pipeline_dedup_hamming_threshold),
+                "fingerprint_shape": [int(cfg.evidence_pipeline_fingerprint_width), int(cfg.evidence_pipeline_fingerprint_height)],
+                "fingerprint_cycle": int(cfg.evidence_pipeline_fingerprint_cycle),
+                "facts_only": True,
+                "runs_after_capture_manifest": True,
+            },
             "gpu_lab": {
                 "enabled": bool(cfg.gpu_lab_enabled),
                 "model_id": GPU_LAB_MODEL_ID,
@@ -685,6 +751,40 @@ class LocalCameraCaptureRunner:
             "frames": manifest_frames,
             "error": error,
         }
+        evidence_pipeline_result: dict[str, Any] | None = None
+        if cfg.evidence_pipeline_enabled:
+            evidence_pipeline_result = self._run_capture_evidence_pipeline(
+                cfg=cfg,
+                session_id=session_id,
+                dataset_dir=dataset_dir,
+                manifest_frames=manifest_frames,
+                started_at=started_at,
+                ended_at=ended_at,
+            )
+            if evidence_pipeline_result.get("event_id"):
+                evidence_pipeline_event_ids.append(str(evidence_pipeline_result["event_id"]))
+            for aid in evidence_pipeline_result.get("artifact_ids", []):
+                evidence_pipeline_artifact_ids.append(str(aid))
+                artifact_ids.append(str(aid))
+            for path in evidence_pipeline_result.get("artifact_paths", []):
+                artifact_paths.append(str(path))
+            bytes_written += int(evidence_pipeline_result.get("bytes_written", 0) or 0)
+            manifest["evidence_pipeline_event_ids"] = evidence_pipeline_event_ids
+            manifest["evidence_pipeline_artifact_ids"] = evidence_pipeline_artifact_ids
+            manifest["evidence_pipeline"].update({
+                "event_count": len(evidence_pipeline_event_ids),
+                "artifact_count": len(evidence_pipeline_artifact_ids),
+                "last_result": {
+                    "ok": bool(evidence_pipeline_result.get("ok")),
+                    "event_id": evidence_pipeline_result.get("event_id"),
+                    "manifest_artifact_id": evidence_pipeline_result.get("manifest_artifact_id"),
+                    "profile_artifact_id": evidence_pipeline_result.get("profile_artifact_id"),
+                    "manifest_csv_path": evidence_pipeline_result.get("manifest_csv_path"),
+                    "profile_path": evidence_pipeline_result.get("profile_path"),
+                    "error": evidence_pipeline_result.get("error"),
+                },
+            })
+
         manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True), encoding="utf-8")
         manifest_size = manifest_path.stat().st_size
         bytes_written += manifest_size
@@ -717,7 +817,7 @@ class LocalCameraCaptureRunner:
                 "camera.capture.completed",
                 camera_id=cfg.camera_id,
                 session_id=session_id,
-                details={"frames_seen": frames_seen, "motion_events": len(motion_event_ids), "object_events": len(object_event_ids), "assistant_summaries": len(assistant_summary_ids), "vlm_analyses": len(vlm_analysis_ids), "smolvlm2_experiments": len(smolvlm2_experiment_ids), "gpu_profiles": len(gpu_profile_event_ids)},
+                details={"frames_seen": frames_seen, "motion_events": len(motion_event_ids), "object_events": len(object_event_ids), "assistant_summaries": len(assistant_summary_ids), "vlm_analyses": len(vlm_analysis_ids), "smolvlm2_experiments": len(smolvlm2_experiment_ids), "gpu_profiles": len(gpu_profile_event_ids), "evidence_pipeline_events": len(evidence_pipeline_event_ids)},
             )
         return LocalCaptureResult(
             ok=ok,
@@ -739,11 +839,219 @@ class LocalCameraCaptureRunner:
             vlm_analysis_ids=vlm_analysis_ids,
             smolvlm2_experiment_ids=smolvlm2_experiment_ids,
             gpu_profile_event_ids=gpu_profile_event_ids,
+            evidence_pipeline_event_ids=evidence_pipeline_event_ids,
+            evidence_pipeline_artifact_ids=evidence_pipeline_artifact_ids,
             started_at=started_at,
             ended_at=ended_at,
             detector=detector_status,
             error=error,
         )
+
+
+    def _run_capture_evidence_pipeline(
+        self,
+        *,
+        cfg: LocalCaptureConfig,
+        session_id: str,
+        dataset_dir: Path,
+        manifest_frames: list[dict[str, Any]],
+        started_at: str,
+        ended_at: str,
+    ) -> dict[str, Any]:
+        if not manifest_frames:
+            self.db.audit(
+                "evidence_pipeline.capture_run.skipped",
+                outcome="warning",
+                camera_id=cfg.camera_id,
+                session_id=session_id,
+                details={"reason": "no_motion_keyframes", "facts_only": True},
+            )
+            return {"ok": False, "error": "no motion keyframes available", "artifact_ids": [], "artifact_paths": [], "bytes_written": 0}
+
+        evidence_dir = dataset_dir / "evidence_pipeline"
+        evidence_dir.mkdir(parents=True, exist_ok=True)
+        csv_path = evidence_dir / "capture_evidence_manifest.csv"
+        profile_path = evidence_dir / "evidence_pipeline_profile.json"
+
+        rows = self._capture_frames_to_evidence_rows(manifest_frames=manifest_frames, fps=cfg.fps)
+        with csv_path.open("w", newline="", encoding="utf-8") as fh:
+            writer = csv.DictWriter(
+                fh,
+                fieldnames=[
+                    "clip_id",
+                    "path",
+                    "start_ms",
+                    "duration_ms",
+                    "bytes",
+                    "motion_score",
+                    "audio_score",
+                    "lighting_delta",
+                    "changed_pixels",
+                ],
+            )
+            writer.writeheader()
+            for row in rows:
+                writer.writerow(row)
+
+        csv_size = csv_path.stat().st_size
+        csv_artifact_id = self.db.add_artifact(
+            session_id=session_id,
+            camera_id=cfg.camera_id,
+            artifact_type="evidence_pipeline_manifest_csv",
+            path=str(csv_path),
+            media_type="text/csv",
+            size_bytes=csv_size,
+            sha256=sha256_file(csv_path),
+        )
+
+        runner = Node1NonLLMGpuLabRunner(
+            GpuLabConfig(
+                enabled=True,
+                binary_path=cfg.evidence_pipeline_binary or cfg.gpu_lab_binary,
+                prefer_cuda=False,
+                allow_python_fallback=False,
+            )
+        )
+        result = runner.run_evidence_pipeline_manifest(
+            manifest_path=csv_path,
+            max_batch_bytes=cfg.evidence_pipeline_max_batch_bytes,
+            max_batch_clips=cfg.evidence_pipeline_max_batch_clips,
+            key_moments=cfg.evidence_pipeline_key_moments,
+            min_key_gap_ms=cfg.evidence_pipeline_min_key_gap_ms,
+            dedup_hamming_threshold=cfg.evidence_pipeline_dedup_hamming_threshold,
+            fingerprint_width=cfg.evidence_pipeline_fingerprint_width,
+            fingerprint_height=cfg.evidence_pipeline_fingerprint_height,
+            fingerprint_cycle=cfg.evidence_pipeline_fingerprint_cycle,
+        )
+        profile_payload = {
+            "schema": EVIDENCE_PIPELINE_SCHEMA,
+            "session_id": session_id,
+            "camera_id": cfg.camera_id,
+            "started_at": started_at,
+            "ended_at": ended_at,
+            "capture_manifest_schema": "monitorme.local_capture_manifest.v2",
+            "evidence_manifest_csv": str(csv_path),
+            "result": result,
+            "facts_only": True,
+            "note": "Capture-run evidence pipeline integration metadata only; no visual, audio, identity, behavior, or intent claim is emitted.",
+        }
+        profile_path.write_text(json.dumps(profile_payload, indent=2, sort_keys=True), encoding="utf-8")
+        profile_size = profile_path.stat().st_size
+        profile_artifact_id = self.db.add_artifact(
+            session_id=session_id,
+            camera_id=cfg.camera_id,
+            artifact_type="evidence_pipeline_profile",
+            path=str(profile_path),
+            media_type="application/json",
+            size_bytes=profile_size,
+            sha256=sha256_file(profile_path),
+        )
+
+        evidence = result.get("evidence_pipeline") or {}
+        safety = evidence.get("safety") or {}
+        event_id = self.db.insert_event(
+            camera_id=cfg.camera_id,
+            session_id=session_id,
+            event_type="evidence_pipeline_indexed",
+            severity="info" if result.get("ok") and safety.get("ok", False) else "warning",
+            label="facts_only_evidence_pipeline",
+            confidence=1.0 if result.get("ok") and safety.get("ok", False) else 0.0,
+            source_node="node1",
+            source_kind="local_v4l2",
+            model_id=EVIDENCE_PIPELINE_MODEL_ID,
+            artifact_id=profile_artifact_id,
+            attrs={
+                "schema": EVIDENCE_PIPELINE_SCHEMA,
+                "native_schema": evidence.get("schema"),
+                "capture_session_id": session_id,
+                "capture_manifest_rows": len(rows),
+                "manifest_artifact_id": csv_artifact_id,
+                "profile_artifact_id": profile_artifact_id,
+                "manifest_csv_path": str(csv_path),
+                "profile_path": str(profile_path),
+                "source": result.get("source"),
+                "binary_path": result.get("binary_path"),
+                "ok": bool(result.get("ok")),
+                "fingerprint_count": evidence.get("fingerprint_count"),
+                "duplicate_group_count": evidence.get("duplicate_group_count"),
+                "duplicate_clip_count": evidence.get("duplicate_clip_count"),
+                "key_moment_count": evidence.get("key_moment_count"),
+                "planned_read_bytes": evidence.get("planned_read_bytes"),
+                "safety": safety,
+                "latency": evidence.get("latency"),
+                "facts_only": True,
+                "privacy": {"external_upload": False, "identity": False, "intent": False, "media_decode": False},
+                "note": "Facts-only capture-run evidence indexing event. It stores storage/fingerprint/dedup/timeline/safety metadata only.",
+            },
+        )
+        self.db.audit(
+            "evidence_pipeline.capture_run.create",
+            camera_id=cfg.camera_id,
+            event_id=event_id,
+            session_id=session_id,
+            details={
+                "manifest_artifact_id": csv_artifact_id,
+                "profile_artifact_id": profile_artifact_id,
+                "fingerprint_count": evidence.get("fingerprint_count"),
+                "duplicate_group_count": evidence.get("duplicate_group_count"),
+                "key_moment_count": evidence.get("key_moment_count"),
+                "safety_ok": safety.get("ok"),
+                "facts_only": True,
+            },
+        )
+        return {
+            "ok": bool(result.get("ok")),
+            "event_id": event_id,
+            "manifest_artifact_id": csv_artifact_id,
+            "profile_artifact_id": profile_artifact_id,
+            "manifest_csv_path": str(csv_path),
+            "profile_path": str(profile_path),
+            "artifact_ids": [csv_artifact_id, profile_artifact_id],
+            "artifact_paths": [str(csv_path), str(profile_path)],
+            "bytes_written": csv_size + profile_size,
+            "error": result.get("error"),
+        }
+
+    def _capture_frames_to_evidence_rows(self, *, manifest_frames: list[dict[str, Any]], fps: int) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        first_frame_id = int(manifest_frames[0].get("frame_id") or 0)
+        frame_duration_ms = max(1, int(round(1000.0 / max(int(fps), 1))))
+        for index, item in enumerate(manifest_frames):
+            path = Path(str(item.get("path") or ""))
+            frame_id = int(item.get("frame_id") or (first_frame_id + index))
+            start_ms = max(0, int(round((frame_id - first_frame_id) * 1000.0 / max(int(fps), 1))))
+            motion_score = float(item.get("motion_score") or 0.0)
+            bbox = item.get("bbox") or []
+            bbox_area = 0.0
+            if isinstance(bbox, list) and len(bbox) == 4:
+                try:
+                    bbox_area = max(0.0, float(bbox[2]) - float(bbox[0])) * max(0.0, float(bbox[3]) - float(bbox[1]))
+                except (TypeError, ValueError):
+                    bbox_area = 0.0
+            changed_pixels = int(round(float(item.get("motion_score") or 0.0) / 100.0 * float(max(self.config.width * self.config.height, 1))))
+            gpu_profile = item.get("gpu_profile") or {}
+            frame_profile = gpu_profile.get("frame") if isinstance(gpu_profile, dict) else {}
+            if isinstance(frame_profile, dict) and frame_profile.get("changed_pixels") is not None:
+                try:
+                    changed_pixels = int(frame_profile.get("changed_pixels") or changed_pixels)
+                except (TypeError, ValueError):
+                    pass
+            lighting_delta = round(min(255.0, motion_score + bbox_area * 100.0), 6)
+            clip_id = str(item.get("motion_event_id") or item.get("artifact_id") or f"frame_{frame_id}")
+            rows.append(
+                {
+                    "clip_id": clip_id,
+                    "path": str(path),
+                    "start_ms": start_ms,
+                    "duration_ms": frame_duration_ms,
+                    "bytes": path.stat().st_size if path.exists() else 0,
+                    "motion_score": round(motion_score / 100.0, 6),
+                    "audio_score": 0.0,
+                    "lighting_delta": lighting_delta,
+                    "changed_pixels": changed_pixels,
+                }
+            )
+        return rows
 
     def _profile_gpu_workload(
         self,

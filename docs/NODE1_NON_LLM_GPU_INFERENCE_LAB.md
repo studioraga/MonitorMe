@@ -834,3 +834,55 @@ python -m pytest -q tests/test_node1_evidence_pipeline_phase9.py
 ```
 
 The safety validator checks manifest count consistency, batch constraints, fingerprint shape, dedup group accounting, key-moment spacing/count limits, and timeline byte/count agreement. It emits violations as strings and keeps `facts_only=true`.
+
+## Phase 10 — Capture-run evidence pipeline integration
+
+Phase 10 wires the Phase 9 evidence pipeline into the real MonitorMe `capture-run` path. The integration runs after local motion keyframes have been stored and before the final capture manifest is written.
+
+Flow:
+
+```text
+capture-run motion keyframes
+  -> capture manifest frame records
+  -> facts-only CSV evidence manifest
+  -> native evidence-pipeline-manifest mode
+  -> evidence_pipeline_profile JSON artifact
+  -> evidence_pipeline_indexed DB event
+  -> final capture manifest references event/artifacts
+```
+
+The bridge converts each stored keyframe record into the native storage/evidence manifest contract:
+
+```text
+clip_id,path,start_ms,duration_ms,bytes,motion_score,audio_score,lighting_delta,changed_pixels
+```
+
+The integration stores two capture artifacts:
+
+- `evidence_pipeline_manifest_csv`
+- `evidence_pipeline_profile`
+
+It also inserts one session-level event:
+
+```text
+event_type=evidence_pipeline_indexed
+label=facts_only_evidence_pipeline
+model_id=node1-non-llm-evidence-pipeline-v0.1
+```
+
+The event attributes include native evidence counts, duplicate group counts, key-moment counts, planned read bytes, latency counters, safety validator output, artifact references, and privacy metadata.
+
+Safety boundary:
+
+- no media upload
+- no identity inference
+- no intent inference
+- no semantic visual/audio claim
+- no person/object claim from the evidence pipeline
+- no media decoding inside the evidence pipeline path
+
+Validation entry point:
+
+```bash
+native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase10_capture_evidence_pipeline_selftest.sh
+```
