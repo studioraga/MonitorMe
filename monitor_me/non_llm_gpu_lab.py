@@ -469,6 +469,47 @@ class Node1NonLLMGpuLabRunner:
         result["binary_path"] = str(binary)
         return result
 
+
+    def run_evidence_pipeline_synthetic(
+        self,
+        *,
+        clips: int = 12,
+        max_batch_bytes: int = 2 * 1024 * 1024,
+        max_batch_clips: int = 4,
+        key_moments: int = 5,
+        min_key_gap_ms: int = 1000,
+        dedup_hamming_threshold: int = 0,
+        fingerprint_width: int = 16,
+        fingerprint_height: int = 16,
+        fingerprint_cycle: int = 6,
+    ) -> dict[str, Any]:
+        binary = self.binary_path
+        if not binary.exists():
+            return {
+                "ok": False,
+                "schema": GPU_LAB_SCHEMA,
+                "error": f"native binary not found: {binary}",
+                "binary_path": str(binary),
+            }
+        cmd = [
+            str(binary),
+            "--mode", "evidence-pipeline-synthetic",
+            "--clips", str(clips),
+            "--max-batch-bytes", str(max_batch_bytes),
+            "--max-batch-clips", str(max_batch_clips),
+            "--key-moments", str(key_moments),
+            "--min-key-gap-ms", str(min_key_gap_ms),
+            "--dedup-hamming-threshold", str(dedup_hamming_threshold),
+            "--fingerprint-width", str(fingerprint_width),
+            "--fingerprint-height", str(fingerprint_height),
+            "--fingerprint-cycle", str(fingerprint_cycle),
+        ]
+        result = self._run_json(cmd)
+        result["schema"] = GPU_LAB_SCHEMA
+        result["source"] = "native_binary"
+        result["binary_path"] = str(binary)
+        return result
+
     def run_isp_synthetic(self, *, filter_name: str = "sobel-mag", width: int = 64, height: int = 48) -> dict[str, Any]:
         binary = self.binary_path
         if not binary.exists():

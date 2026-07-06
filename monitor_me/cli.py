@@ -163,6 +163,24 @@ def cmd_gpu_lab_storage_batch_synthetic(args: argparse.Namespace) -> int:
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0 if result.get("ok") else 3
 
+
+def cmd_gpu_lab_evidence_pipeline_synthetic(args: argparse.Namespace) -> int:
+    config = GpuLabConfig.from_env(enabled=True)
+    runner = Node1NonLLMGpuLabRunner(config)
+    result = runner.run_evidence_pipeline_synthetic(
+        clips=args.clips,
+        max_batch_bytes=args.max_batch_bytes,
+        max_batch_clips=args.max_batch_clips,
+        key_moments=args.key_moments,
+        min_key_gap_ms=args.min_key_gap_ms,
+        dedup_hamming_threshold=args.dedup_hamming_threshold,
+        fingerprint_width=args.fingerprint_width,
+        fingerprint_height=args.fingerprint_height,
+        fingerprint_cycle=args.fingerprint_cycle,
+    )
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0 if result.get("ok") else 3
+
 def cmd_gpu_lab_isp_synthetic(args: argparse.Namespace) -> int:
     config = GpuLabConfig.from_env(enabled=True)
     runner = Node1NonLLMGpuLabRunner(config)
@@ -444,6 +462,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--key-moments", type=int, default=5)
     p.add_argument("--min-key-gap-ms", type=int, default=1000)
     p.set_defaults(func=cmd_gpu_lab_storage_batch_synthetic)
+
+
+
+    p = sub.add_parser("gpu-lab-evidence-pipeline-synthetic", help="Run visual fingerprint/evidence dedup, key-moment, storage batch, latency, and safety validation")
+    p.add_argument("--clips", type=int, default=12)
+    p.add_argument("--max-batch-bytes", type=int, default=2 * 1024 * 1024)
+    p.add_argument("--max-batch-clips", type=int, default=4)
+    p.add_argument("--key-moments", type=int, default=5)
+    p.add_argument("--min-key-gap-ms", type=int, default=1000)
+    p.add_argument("--dedup-hamming-threshold", type=int, default=0)
+    p.add_argument("--fingerprint-width", type=int, default=16)
+    p.add_argument("--fingerprint-height", type=int, default=16)
+    p.add_argument("--fingerprint-cycle", type=int, default=6)
+    p.set_defaults(func=cmd_gpu_lab_evidence_pipeline_synthetic)
 
     p = sub.add_parser("gpu-lab-isp-synthetic", help="Run ISP synthetic filter validation; CUDA comparison is used when available")
     p.add_argument("--filter", default="sobel-mag", choices=["blur", "sharpen", "edge", "sobel-x", "sobel-y", "sobel-mag"])

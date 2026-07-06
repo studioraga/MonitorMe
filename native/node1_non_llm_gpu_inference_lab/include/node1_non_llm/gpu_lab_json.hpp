@@ -8,6 +8,7 @@
 #include "node1_non_llm/overlay_heavy.hpp"
 #include "node1_non_llm/audiobox.hpp"
 #include "node1_non_llm/storage_batch.hpp"
+#include "node1_non_llm/evidence_pipeline.hpp"
 
 #include <cstdint>
 #include <string>
@@ -35,5 +36,6 @@ std::string overlay_heavy_cpu_cuda_comparison_json(const OverlayHeavyAnalysis& c
 std::string audiobox_analysis_json(const AudioBoxAnalysis& analysis, bool include_output = false);
 std::string audiobox_cpu_cuda_comparison_json(const AudioBoxAnalysis& cpu, const AudioBoxAnalysis& cuda);
 std::string storage_batch_analysis_json(const StorageBatchAnalysis& analysis, bool include_manifest = false);
+std::string evidence_pipeline_analysis_json(const EvidencePipelineAnalysis& analysis, bool include_output = false);
 
 } // namespace node1_non_llm

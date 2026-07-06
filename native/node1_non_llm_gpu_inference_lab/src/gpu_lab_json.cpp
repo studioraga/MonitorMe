@@ -943,4 +943,159 @@ std::string storage_batch_analysis_json(const StorageBatchAnalysis& a, bool incl
     return os.str();
 }
 
+
+std::string string_vector_json_local(const std::vector<std::string>& values) {
+    std::ostringstream os;
+    os << "[";
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        if (i != 0) os << ",";
+        os << "\"" << json_escape(values[i]) << "\"";
+    }
+    os << "]";
+    return os.str();
+}
+
+std::string uint32_vector_json_local(const std::vector<std::uint32_t>& values) {
+    std::ostringstream os;
+    os << "[";
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        if (i != 0) os << ",";
+        os << values[i];
+    }
+    os << "]";
+    return os.str();
+}
+
+std::string evidence_fingerprint_json(const EvidenceFingerprint& f, bool include_output) {
+    std::ostringstream os;
+    os << "{";
+    os << "\"clip_index\":" << f.clip_index << ",";
+    os << "\"clip_id\":\"" << json_escape(f.clip_id) << "\",";
+    os << "\"start_ms\":" << f.start_ms << ",";
+    os << "\"duration_ms\":" << f.duration_ms << ",";
+    os << "\"fingerprint_hex\":\"" << json_escape(f.fingerprint_hex) << "\",";
+    os << "\"ahash64\":" << f.ahash64 << ",";
+    os << "\"dhash64\":" << f.dhash64 << ",";
+    os << "\"fingerprint64\":" << f.fingerprint64 << ",";
+    os << "\"histogram_bins\":" << f.histogram_bins << ",";
+    os << "\"duplicate_group\":" << f.duplicate_group << ",";
+    os << "\"duplicate_of\":" << f.duplicate_of << ",";
+    os << "\"nearest_hamming\":" << f.nearest_hamming << ",";
+    os << "\"fingerprint_score\":" << f.fingerprint_score;
+    if (include_output) {
+        os << ",\"histogram16\":" << uint32_vector_json_local(f.histogram16);
+    }
+    os << "}";
+    return os.str();
+}
+
+std::string evidence_fingerprints_json(const std::vector<EvidenceFingerprint>& values, bool include_output) {
+    std::ostringstream os;
+    os << "[";
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        if (i != 0) os << ",";
+        os << evidence_fingerprint_json(values[i], include_output);
+    }
+    os << "]";
+    return os.str();
+}
+
+std::string evidence_duplicate_group_json(const EvidenceDuplicateGroup& g) {
+    std::ostringstream os;
+    os << "{";
+    os << "\"group_id\":" << g.group_id << ",";
+    os << "\"representative_clip_index\":" << g.representative_clip_index << ",";
+    os << "\"representative_clip_id\":\"" << json_escape(g.representative_clip_id) << "\",";
+    os << "\"group_size\":" << g.group_size << ",";
+    os << "\"duplicate_count\":" << g.duplicate_count << ",";
+    os << "\"min_hamming\":" << g.min_hamming << ",";
+    os << "\"max_hamming\":" << g.max_hamming << ",";
+    os << "\"clip_indices\":" << int_vector_json_local(g.clip_indices) << ",";
+    os << "\"clip_ids\":" << string_vector_json_local(g.clip_ids);
+    os << "}";
+    return os.str();
+}
+
+std::string evidence_duplicate_groups_json(const std::vector<EvidenceDuplicateGroup>& groups) {
+    std::ostringstream os;
+    os << "[";
+    for (std::size_t i = 0; i < groups.size(); ++i) {
+        if (i != 0) os << ",";
+        os << evidence_duplicate_group_json(groups[i]);
+    }
+    os << "]";
+    return os.str();
+}
+
+std::string evidence_latency_json(const EvidencePipelineLatencyThroughput& l) {
+    std::ostringstream os;
+    os << "{";
+    os << "\"manifest_scan_ms\":" << l.manifest_scan_ms << ",";
+    os << "\"batch_plan_ms\":" << l.batch_plan_ms << ",";
+    os << "\"fingerprint_ms\":" << l.fingerprint_ms << ",";
+    os << "\"dedup_ms\":" << l.dedup_ms << ",";
+    os << "\"key_selection_ms\":" << l.key_selection_ms << ",";
+    os << "\"safety_validation_ms\":" << l.safety_validation_ms << ",";
+    os << "\"total_ms\":" << l.total_ms << ",";
+    os << "\"clips_per_ms\":" << l.clips_per_ms << ",";
+    os << "\"planned_read_mb\":" << l.planned_read_mb << ",";
+    os << "\"planned_read_mb_per_s\":" << l.planned_read_mb_per_s;
+    os << "}";
+    return os.str();
+}
+
+std::string evidence_safety_json(const EvidenceSafetyValidation& s) {
+    std::ostringstream os;
+    os << "{";
+    os << "\"ok\":" << bool_json(s.ok) << ",";
+    os << "\"schema\":\"" << json_escape(s.schema) << "\",";
+    os << "\"facts_only\":" << bool_json(s.facts_only) << ",";
+    os << "\"no_semantic_claims\":" << bool_json(s.no_semantic_claims) << ",";
+    os << "\"manifest_ok\":" << bool_json(s.manifest_ok) << ",";
+    os << "\"batch_plan_ok\":" << bool_json(s.batch_plan_ok) << ",";
+    os << "\"key_moments_ok\":" << bool_json(s.key_moments_ok) << ",";
+    os << "\"fingerprint_ok\":" << bool_json(s.fingerprint_ok) << ",";
+    os << "\"dedup_ok\":" << bool_json(s.dedup_ok) << ",";
+    os << "\"timeline_ok\":" << bool_json(s.timeline_ok) << ",";
+    os << "\"checks_count\":" << s.checks_count << ",";
+    os << "\"violation_count\":" << s.violation_count << ",";
+    os << "\"violations\":" << string_vector_json_local(s.violations);
+    os << "}";
+    return os.str();
+}
+
+std::string evidence_pipeline_analysis_json(const EvidencePipelineAnalysis& a, bool include_output) {
+    std::ostringstream os;
+    os << "{";
+    os << "\"ok\":" << bool_json(a.ok) << ",";
+    os << "\"backend\":\"" << json_escape(a.backend) << "\",";
+    os << "\"schema\":\"" << json_escape(a.schema) << "\",";
+    os << "\"error\":\"" << json_escape(a.error) << "\",";
+    os << "\"manifest_entries\":" << a.manifest_entries << ",";
+    os << "\"fingerprint_count\":" << a.fingerprint_count << ",";
+    os << "\"duplicate_group_count\":" << a.duplicate_group_count << ",";
+    os << "\"duplicate_clip_count\":" << a.duplicate_clip_count << ",";
+    os << "\"unique_clip_count\":" << a.unique_clip_count << ",";
+    os << "\"key_moment_count\":" << a.key_moment_count << ",";
+    os << "\"batch_count\":" << a.batch_count << ",";
+    os << "\"planned_read_bytes\":" << a.planned_read_bytes << ",";
+    os << "\"total_manifest_bytes\":" << a.total_manifest_bytes << ",";
+    os << "\"dedup_hamming_threshold\":" << a.dedup_hamming_threshold << ",";
+    os << "\"fingerprint_width\":" << a.fingerprint_width << ",";
+    os << "\"fingerprint_height\":" << a.fingerprint_height << ",";
+    os << "\"fingerprint_cycle\":" << a.fingerprint_cycle << ",";
+    os << "\"facts_only\":true,";
+    os << "\"note\":\"Visual fingerprint, evidence dedup, storage planning, latency/throughput, and safety validation workload metadata only; no object, identity, speech content, behavior, or intent claim is emitted.\",";
+    os << "\"storage_batch\":" << storage_batch_analysis_json(a.storage_batch, include_output) << ",";
+    os << "\"fingerprints\":" << evidence_fingerprints_json(a.fingerprints, include_output) << ",";
+    os << "\"duplicate_groups\":" << evidence_duplicate_groups_json(a.duplicate_groups) << ",";
+    os << "\"key_moments\":" << storage_key_moments_json(a.key_moments) << ",";
+    os << "\"timeline\":" << storage_timeline_json(a.timeline) << ",";
+    os << "\"latency\":" << evidence_latency_json(a.latency) << ",";
+    os << "\"safety\":" << evidence_safety_json(a.safety) << ",";
+    os << "\"timing\":" << stage_timing_json(a.timing);
+    os << "}";
+    return os.str();
+}
+
 } // namespace node1_non_llm

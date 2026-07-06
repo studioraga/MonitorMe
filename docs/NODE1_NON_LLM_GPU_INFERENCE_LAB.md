@@ -768,3 +768,69 @@ storage_batch.facts_only          true
 ```
 
 Safety boundary: this path reports storage and timeline metadata only. It does not emit object, person, identity, speech content, behavior, intent, weapon, suspiciousness, or semantic audio/visual claims.
+
+## Phase 9 — Evidence pipeline expansion
+
+Phase 9 implements the next roadmap block after storage planning:
+
+```text
+visual fingerprint / evidence dedup
+clip sampler / key-moment selector
+storage batch-read planner reuse
+latency / throughput monitor
+evidence safety validator
+native / Python bridge expansion
+CLI and docs expansion
+```
+
+The module is intentionally facts-only. It generates deterministic visual-fingerprint workload vectors from clip manifest/timeline metadata and does not decode media. This keeps the lab suitable for benchmarking evidence-index primitives without making semantic visual or audio claims.
+
+Native modes:
+
+```bash
+./build-cpu/node1_non_llm_gpu_lab \
+  --mode evidence-pipeline-synthetic \
+  --clips 12 \
+  --max-batch-bytes 1600000 \
+  --max-batch-clips 3 \
+  --key-moments 4 \
+  --min-key-gap-ms 1000 \
+  --dedup-hamming-threshold 0 \
+  --fingerprint-width 16 \
+  --fingerprint-height 16 \
+  --fingerprint-cycle 6 \
+  --include-output
+```
+
+```bash
+./build-cpu/node1_non_llm_gpu_lab \
+  --mode evidence-pipeline-manifest \
+  --manifest clips.csv \
+  --max-batch-bytes 1600000 \
+  --max-batch-clips 3 \
+  --key-moments 4 \
+  --min-key-gap-ms 1000 \
+  --dedup-hamming-threshold 0 \
+  --include-output
+```
+
+JSON fields:
+
+```text
+evidence_pipeline.storage_batch       reused storage planner facts
+evidence_pipeline.fingerprints         ahash/dhash/fingerprint/histogram facts
+evidence_pipeline.duplicate_groups     dedup groups and representative clips
+evidence_pipeline.key_moments          dedup-aware key-moment selector output
+evidence_pipeline.timeline             clip timeline features
+evidence_pipeline.latency              per-stage latency and throughput counters
+evidence_pipeline.safety               evidence safety validator result
+```
+
+Validation:
+
+```bash
+native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase9_evidence_pipeline_selftest.sh
+python -m pytest -q tests/test_node1_evidence_pipeline_phase9.py
+```
+
+The safety validator checks manifest count consistency, batch constraints, fingerprint shape, dedup group accounting, key-moment spacing/count limits, and timeline byte/count agreement. It emits violations as strings and keeps `facts_only=true`.

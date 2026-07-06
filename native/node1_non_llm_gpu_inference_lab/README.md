@@ -478,3 +478,39 @@ clip_id,path,start_ms,duration_ms,bytes,motion_score,audio_score,lighting_delta,
 ```
 
 The output emits `storage_batch` with manifest counts, batch plans, selected key moments, timeline features, bytes planned, timing, and `facts_only=true`. It does not emit visual, audio, identity, behavior, or intent claims.
+
+## Phase 9 — Evidence pipeline expansion
+
+Phase 9 adds the facts-only evidence pipeline:
+
+```text
+manifest scan / storage plan reuse
+visual fingerprint workload vectors
+evidence dedup groups
+key-moment selector with dedup representatives
+latency and throughput monitor
+evidence safety validator
+```
+
+Run CPU validation:
+
+```bash
+./scripts/run_node1_gpu_lab_phase9_evidence_pipeline_selftest.sh
+```
+
+Run a native synthetic example:
+
+```bash
+./build-cpu/node1_non_llm_gpu_lab \
+  --mode evidence-pipeline-synthetic \
+  --clips 12 \
+  --max-batch-bytes 1600000 \
+  --max-batch-clips 3 \
+  --key-moments 4 \
+  --min-key-gap-ms 1000 \
+  --dedup-hamming-threshold 0 \
+  --fingerprint-cycle 6 \
+  --include-output
+```
+
+The output is `evidence_pipeline` with `storage_batch`, `fingerprints`, `duplicate_groups`, `key_moments`, `timeline`, `latency`, and `safety`. It does not decode media and does not emit object, person, identity, speech content, behavior, intent, or suspiciousness claims.

@@ -179,12 +179,13 @@ std::vector<float> make_synthetic_audio(int sample_count) {
 }
 
 void print_usage() {
-    std::cerr << "node1_non_llm_gpu_lab --mode synthetic|analyze-raw-gray|audio-raw-f32|isp-synthetic|isp-pgm|sparse-roi-synthetic|mixed-region-synthetic|dense-full-frame-synthetic|overlay-heavy-synthetic|audiobox-synthetic|storage-batch-synthetic|storage-batch-manifest [options]\n"
+    std::cerr << "node1_non_llm_gpu_lab --mode synthetic|analyze-raw-gray|audio-raw-f32|isp-synthetic|isp-pgm|sparse-roi-synthetic|mixed-region-synthetic|dense-full-frame-synthetic|overlay-heavy-synthetic|audiobox-synthetic|storage-batch-synthetic|storage-batch-manifest|evidence-pipeline-synthetic|evidence-pipeline-manifest [options]\n"
               << "  --scenario sparse|mixed|dense|contiguous|scattered synthetic frame pattern\n"
               << "  --prev previous.gray --curr current.gray --width W --height H\n"
               << "  --audio samples.f32 --audio-samples N --audio-window-samples N\n"
               << "  --sample-rate N --silence-threshold F --onset-threshold F --max-lag N --sync-drift-samples N\n"
               << "  --manifest clips.csv --max-batch-bytes N --max-batch-clips N --key-moments N --min-key-gap-ms N\n"
+              << "  --dedup-hamming-threshold N --fingerprint-width N --fingerprint-height N --fingerprint-cycle N\n"
               << "  --isp-filter blur|sharpen|edge|sobel-x|sobel-y|sobel-mag\n"
               << "  --input frame.pgm|frame.ppm --output filtered.pgm|filtered.ppm\n"
               << "  --target-width N --target-height N    ROI/mixed-region resize target dimensions\n"
@@ -251,7 +252,7 @@ int main(int argc, char** argv) {
             make_synthetic_frames(width, height, arg_string(args, "scenario", "mixed"), prev, curr);
             cpu_frame = analyze_gray_frames_cpu(prev.data(), curr.data(), tile_cfg);
             ran_frame = true;
-        } else if (mode != "audio-raw-f32" && mode != "audiobox-synthetic" && mode != "storage-batch-synthetic" && mode != "storage-batch-manifest" && mode != "isp-synthetic" && mode != "isp-pgm") {
+        } else if (mode != "audio-raw-f32" && mode != "audiobox-synthetic" && mode != "storage-batch-synthetic" && mode != "storage-batch-manifest" && mode != "evidence-pipeline-synthetic" && mode != "evidence-pipeline-manifest" && mode != "isp-synthetic" && mode != "isp-pgm") {
             throw std::runtime_error("unknown mode: " + mode);
         }
 
@@ -466,7 +467,9 @@ int main(int argc, char** argv) {
 
         StorageBatchAnalysis cpu_storage_batch;
         bool ran_storage_batch = false;
-        if (mode == "storage-batch-synthetic" || mode == "storage-batch-manifest") {
+        EvidencePipelineAnalysis cpu_evidence_pipeline;
+        bool ran_evidence_pipeline = false;
+        if (mode == "storage-batch-synthetic" || mode == "storage-batch-manifest" || mode == "evidence-pipeline-synthetic" || mode == "evidence-pipeline-manifest") {
             StorageBatchConfig storage_cfg;
             storage_cfg.max_batch_bytes = static_cast<std::uint64_t>(std::stoull(arg_string(args, "max-batch-bytes", "2097152")));
             storage_cfg.max_batch_clips = arg_int(args, "max-batch-clips", 4);
@@ -475,17 +478,31 @@ int main(int argc, char** argv) {
             storage_cfg.collect_manifest = has_flag(args, "include-output");
 
             std::vector<StorageManifestEntry> manifest;
-            if (mode == "storage-batch-manifest") {
+            if (mode == "storage-batch-manifest" || mode == "evidence-pipeline-manifest") {
                 const std::string manifest_path = arg_string(args, "manifest", "");
                 if (manifest_path.empty()) {
-                    throw std::runtime_error("--manifest is required for --mode storage-batch-manifest");
+                    throw std::runtime_error("--manifest is required for manifest-backed storage/evidence modes");
                 }
                 manifest = scan_storage_manifest_csv(manifest_path);
             } else {
                 manifest = make_synthetic_storage_manifest(arg_int(args, "clips", 12));
             }
-            cpu_storage_batch = analyze_storage_batch_cpu(manifest, storage_cfg);
-            ran_storage_batch = true;
+            if (mode == "evidence-pipeline-synthetic" || mode == "evidence-pipeline-manifest") {
+                EvidencePipelineConfig evidence_cfg;
+                evidence_cfg.storage = storage_cfg;
+                evidence_cfg.fingerprint_width = arg_int(args, "fingerprint-width", 16);
+                evidence_cfg.fingerprint_height = arg_int(args, "fingerprint-height", 16);
+                evidence_cfg.fingerprint_cycle = arg_int(args, "fingerprint-cycle", 6);
+                evidence_cfg.dedup_hamming_threshold = arg_int(args, "dedup-hamming-threshold", 0);
+                evidence_cfg.collect_output = has_flag(args, "include-output");
+                cpu_evidence_pipeline = analyze_evidence_pipeline_cpu(manifest, evidence_cfg);
+                cpu_storage_batch = cpu_evidence_pipeline.storage_batch;
+                ran_evidence_pipeline = true;
+                ran_storage_batch = true;
+            } else {
+                cpu_storage_batch = analyze_storage_batch_cpu(manifest, storage_cfg);
+                ran_storage_batch = true;
+            }
         }
 
 #ifndef NODE1_NON_LLM_WITH_CUDA
@@ -575,6 +592,8 @@ int main(int argc, char** argv) {
 #endif
         const bool include_storage_batch_output = has_flag(args, "include-output");
         os << ",\"storage_batch\":" << (ran_storage_batch ? storage_batch_analysis_json(cpu_storage_batch, include_storage_batch_output) : "null");
+        const bool include_evidence_pipeline_output = has_flag(args, "include-output");
+        os << ",\"evidence_pipeline\":" << (ran_evidence_pipeline ? evidence_pipeline_analysis_json(cpu_evidence_pipeline, include_evidence_pipeline_output) : "null");
         if (ran_isp) {
 
             os << ",\"isp_input\":\"" << json_escape(isp_input_path) << "\"";

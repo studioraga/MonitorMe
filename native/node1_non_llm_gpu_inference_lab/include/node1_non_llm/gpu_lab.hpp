@@ -8,6 +8,7 @@
 #include "node1_non_llm/overlay_heavy.hpp"
 #include "node1_non_llm/audiobox.hpp"
 #include "node1_non_llm/storage_batch.hpp"
+#include "node1_non_llm/evidence_pipeline.hpp"
 
 namespace node1_non_llm {
 
@@ -29,6 +30,10 @@ AudioBoxAnalysis analyze_audiobox_cpu(
 StorageBatchAnalysis analyze_storage_batch_cpu(
     const std::vector<StorageManifestEntry>& manifest,
     const StorageBatchConfig& cfg);
+
+EvidencePipelineAnalysis analyze_evidence_pipeline_cpu(
+    const std::vector<StorageManifestEntry>& manifest,
+    const EvidencePipelineConfig& cfg);
 
 #ifdef NODE1_NON_LLM_WITH_CUDA
 FrameAnalysis analyze_gray_frames_cuda(

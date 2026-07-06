@@ -387,6 +387,52 @@ void test_audiobox_cpu() {
     require(!validate_audiobox_config(cfg, error), "invalid AudioBox max_lag accepted");
 }
 
+
+void test_evidence_pipeline_cpu() {
+    EvidencePipelineConfig cfg;
+    cfg.storage.max_batch_bytes = 1600000ULL;
+    cfg.storage.max_batch_clips = 3;
+    cfg.storage.key_moments = 4;
+    cfg.storage.min_key_gap_ms = 1000;
+    cfg.storage.collect_manifest = true;
+    cfg.fingerprint_width = 16;
+    cfg.fingerprint_height = 16;
+    cfg.fingerprint_cycle = 6;
+    cfg.dedup_hamming_threshold = 0;
+    cfg.collect_output = true;
+
+    std::string error;
+    require(validate_evidence_pipeline_config(cfg, error), "valid evidence pipeline config rejected");
+    const auto manifest = make_synthetic_storage_manifest(12);
+    const auto analysis = analyze_evidence_pipeline_cpu(manifest, cfg);
+    require(analysis.ok, "evidence pipeline analysis failed: " + analysis.error);
+    require(analysis.manifest_entries == 12, "evidence manifest entry count mismatch");
+    require(analysis.fingerprint_count == 12, "evidence fingerprint count mismatch");
+    require(analysis.duplicate_group_count >= 1, "evidence duplicate groups missing");
+    require(analysis.duplicate_clip_count > 0, "evidence duplicate clip count missing");
+    require(analysis.unique_clip_count + analysis.duplicate_clip_count == analysis.fingerprint_count, "evidence unique/duplicate accounting mismatch");
+    require(analysis.batch_count == analysis.storage_batch.batch_count, "evidence storage batch count mismatch");
+    require(analysis.planned_read_bytes == analysis.total_manifest_bytes, "evidence planned bytes mismatch");
+    require(analysis.key_moment_count <= cfg.storage.key_moments, "evidence key moment count mismatch");
+    require(analysis.safety.ok, "evidence safety validator failed");
+    require(analysis.safety.violation_count == 0, "evidence safety violation count mismatch");
+    require(analysis.latency.total_ms >= 0.0, "evidence latency monitor missing total time");
+    require(analysis.latency.planned_read_mb > 0.0, "evidence throughput monitor missing planned MB");
+    require(analysis.fingerprints.front().histogram16.size() == 16, "evidence fingerprint histogram missing");
+    require(analysis.fingerprints.front().fingerprint_hex.rfind("0x", 0) == 0, "evidence fingerprint hex missing");
+
+    const std::string json = evidence_pipeline_analysis_json(analysis, true);
+    require(json.find("\"schema\":\"node1_non_llm_evidence_pipeline.v0.1\"") != std::string::npos, "evidence JSON missing schema");
+    require(json.find("\"fingerprints\":") != std::string::npos, "evidence JSON missing fingerprints");
+    require(json.find("\"duplicate_groups\":") != std::string::npos, "evidence JSON missing duplicate groups");
+    require(json.find("\"latency\":") != std::string::npos, "evidence JSON missing latency");
+    require(json.find("\"safety\":") != std::string::npos, "evidence JSON missing safety validator");
+    require(json.find("\"facts_only\":true") != std::string::npos, "evidence JSON missing facts_only");
+
+    cfg.fingerprint_width = 4;
+    require(!validate_evidence_pipeline_config(cfg, error), "invalid evidence fingerprint width accepted");
+}
+
 void test_isp_filter_reference_equivalence() {
     const int width = 9;
     const int height = 7;
@@ -537,6 +583,7 @@ int main() {
         test_overlay_heavy_cpu();
         test_audiobox_cpu();
         test_storage_batch_cpu();
+        test_evidence_pipeline_cpu();
         test_isp_filter_reference_equivalence();
         test_isp_known_values();
         test_pgm_ppm_io();

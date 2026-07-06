@@ -919,3 +919,22 @@ python -m monitor_me.cli gpu-lab-storage-batch-synthetic --clips 12
 ```
 
 The result includes `storage_batch` facts with batch count, planned read bytes, key moments, timeline span, gap metrics, and manifest metadata when `--include-output` is used natively. This path is metadata-only and does not decode media or infer visual/audio semantics, identity, behavior, or intent.
+
+### Node1 non-LLM GPU lab Phase 9
+
+Phase 9 adds a combined evidence pipeline for the post-storage-planning roadmap items: visual fingerprint workload vectors, evidence dedup grouping, dedup-aware key-moment selection, storage batch-read plan reuse, latency/throughput counters, safety validation, native/Python bridge expansion, CLI exposure, and documentation.
+
+The native mode is:
+
+```bash
+python -m monitor_me.cli gpu-lab-evidence-pipeline-synthetic \
+  --clips 12 \
+  --max-batch-bytes 1600000 \
+  --max-batch-clips 3 \
+  --key-moments 4 \
+  --min-key-gap-ms 1000 \
+  --dedup-hamming-threshold 0 \
+  --fingerprint-cycle 6
+```
+
+The result includes `evidence_pipeline`, nested `storage_batch`, `fingerprints`, `duplicate_groups`, dedup-aware `key_moments`, `timeline`, `latency`, and `safety`. The path is facts-only and does not decode media or make object, identity, speech-content, behavior, or intent claims.
