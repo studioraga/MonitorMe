@@ -6,6 +6,7 @@
 #include "node1_non_llm/mixed_region.hpp"
 #include "node1_non_llm/dense_full_frame.hpp"
 #include "node1_non_llm/overlay_heavy.hpp"
+#include "node1_non_llm/audiobox.hpp"
 
 namespace node1_non_llm {
 
@@ -18,6 +19,11 @@ AudioEnergyAnalysis analyze_audio_energy_cpu(
     const float* samples,
     int sample_count,
     const AudioEnergyConfig& cfg);
+
+AudioBoxAnalysis analyze_audiobox_cpu(
+    const float* primary_samples,
+    const float* reference_samples,
+    const AudioBoxConfig& cfg);
 
 #ifdef NODE1_NON_LLM_WITH_CUDA
 FrameAnalysis analyze_gray_frames_cuda(
@@ -55,6 +61,11 @@ OverlayHeavyAnalysis analyze_overlay_heavy_cuda(
     const std::uint8_t* previous_gray,
     const std::uint8_t* current_gray,
     const OverlayHeavyConfig& cfg);
+
+AudioBoxAnalysis analyze_audiobox_cuda(
+    const float* primary_samples,
+    const float* reference_samples,
+    const AudioBoxConfig& cfg);
 #endif
 
 } // namespace node1_non_llm

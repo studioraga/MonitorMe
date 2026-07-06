@@ -330,6 +330,63 @@ void test_overlay_heavy_cpu() {
     require(!validate_overlay_heavy_config(cfg, error), "invalid overlay alpha accepted");
 }
 
+void test_audiobox_cpu() {
+    const int samples = 8192;
+    const int drift = 48;
+    std::vector<float> primary(static_cast<std::size_t>(samples), 0.0f);
+    std::vector<float> reference(static_cast<std::size_t>(samples), 0.0f);
+    for (int i = 2048; i < 2560; ++i) {
+        const int phase = (i - 2048) % 11;
+        primary[static_cast<std::size_t>(i)] = (phase & 1) ? 0.35f : -0.35f;
+    }
+    for (int i = 4096; i < 4608; ++i) {
+        const int phase = (i - 4096) % 7;
+        primary[static_cast<std::size_t>(i)] = (phase & 1) ? 0.25f : -0.25f;
+    }
+    for (int i = 0; i < samples; ++i) {
+        const int j = i + drift;
+        if (j >= 0 && j < samples) {
+            reference[static_cast<std::size_t>(j)] = primary[static_cast<std::size_t>(i)];
+        }
+    }
+
+    AudioBoxConfig cfg;
+    cfg.sample_count = samples;
+    cfg.sample_rate = 48000;
+    cfg.window_samples = 1024;
+    cfg.silence_threshold = 0.02f;
+    cfg.onset_threshold = 0.08f;
+    cfg.max_windows = 8;
+    cfg.max_lag = 96;
+    cfg.collect_output = true;
+
+    std::string error;
+    require(validate_audiobox_config(cfg, error), "valid AudioBox config rejected");
+    const auto analysis = analyze_audiobox_cpu(primary.data(), reference.data(), cfg);
+    require(analysis.ok, "AudioBox CPU analysis failed: " + analysis.error);
+    require(analysis.windows == 8, "AudioBox window count mismatch");
+    require(analysis.rms.size() == 8, "AudioBox RMS vector size mismatch");
+    require(analysis.peaks.size() == 8, "AudioBox peak vector size mismatch");
+    require(analysis.correlation_scores.size() == 193, "AudioBox correlation vector size mismatch");
+    require(analysis.active_windows == 2, "AudioBox active window mismatch");
+    require(analysis.silent_windows == 6, "AudioBox silent window mismatch");
+    require(analysis.onset_count == 2, "AudioBox onset count mismatch");
+    require(analysis.max_peak == 0.35f, "AudioBox max peak mismatch");
+    require(analysis.sync_drift_samples == drift, "AudioBox sync drift mismatch");
+    require(std::abs(analysis.sync_drift_ms - 1.0) < 1e-9, "AudioBox drift ms mismatch");
+    require(analysis.sync_correlation_abs > 0.99f, "AudioBox sync correlation too low");
+    require(analysis.bytes_read == static_cast<std::uint64_t>(samples) * sizeof(float) * 2ULL, "AudioBox bytes_read mismatch");
+    require(analysis.bytes_written == static_cast<std::uint64_t>(analysis.rms.size() + analysis.peaks.size() + analysis.correlation_scores.size()) * sizeof(float), "AudioBox bytes_written mismatch");
+
+    const std::string json = audiobox_analysis_json(analysis, true);
+    require(json.find("\"schema\":\"node1_non_llm_audiobox.v0.1\"") != std::string::npos, "AudioBox JSON missing schema");
+    require(json.find("\"facts_only\":true") != std::string::npos, "AudioBox JSON missing facts_only");
+    require(json.find("\"correlation_scores\":") != std::string::npos, "AudioBox JSON missing correlation scores");
+
+    cfg.max_lag = samples;
+    require(!validate_audiobox_config(cfg, error), "invalid AudioBox max_lag accepted");
+}
+
 void test_isp_filter_reference_equivalence() {
     const int width = 9;
     const int height = 7;
@@ -439,6 +496,7 @@ int main() {
         test_mixed_region_cpu();
         test_dense_full_frame_cpu();
         test_overlay_heavy_cpu();
+        test_audiobox_cpu();
         test_isp_filter_reference_equivalence();
         test_isp_known_values();
         test_pgm_ppm_io();

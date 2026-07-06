@@ -133,6 +133,22 @@ def cmd_gpu_lab_overlay_heavy_synthetic(args: argparse.Namespace) -> int:
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0 if result.get("ok") else 3
 
+def cmd_gpu_lab_audiobox_synthetic(args: argparse.Namespace) -> int:
+    config = GpuLabConfig.from_env(enabled=True)
+    runner = Node1NonLLMGpuLabRunner(config)
+    result = runner.run_audiobox_synthetic(
+        audio_samples=args.audio_samples,
+        sample_rate=args.sample_rate,
+        window_samples=args.window_samples,
+        silence_threshold=args.silence_threshold,
+        onset_threshold=args.onset_threshold,
+        max_windows=args.max_windows,
+        max_lag=args.max_lag,
+        sync_drift_samples=args.sync_drift_samples,
+    )
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0 if result.get("ok") else 3
+
 def cmd_gpu_lab_isp_synthetic(args: argparse.Namespace) -> int:
     config = GpuLabConfig.from_env(enabled=True)
     runner = Node1NonLLMGpuLabRunner(config)
@@ -393,6 +409,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--thumbnail-height", type=int, default=48)
     p.add_argument("--alpha", type=int, default=128)
     p.set_defaults(func=cmd_gpu_lab_overlay_heavy_synthetic)
+
+
+    p = sub.add_parser("gpu-lab-audiobox-synthetic", help="Run AudioBox RMS/peak/silence/onset/cross-correlation sync-drift validation; CUDA comparison is used when available")
+    p.add_argument("--audio-samples", type=int, default=32768)
+    p.add_argument("--sample-rate", type=int, default=48000)
+    p.add_argument("--window-samples", type=int, default=1024)
+    p.add_argument("--silence-threshold", type=float, default=0.02)
+    p.add_argument("--onset-threshold", type=float, default=0.08)
+    p.add_argument("--max-windows", type=int, default=32)
+    p.add_argument("--max-lag", type=int, default=128)
+    p.add_argument("--sync-drift-samples", type=int, default=64)
+    p.set_defaults(func=cmd_gpu_lab_audiobox_synthetic)
 
     p = sub.add_parser("gpu-lab-isp-synthetic", help="Run ISP synthetic filter validation; CUDA comparison is used when available")
     p.add_argument("--filter", default="sobel-mag", choices=["blur", "sharpen", "edge", "sobel-x", "sobel-y", "sobel-mag"])

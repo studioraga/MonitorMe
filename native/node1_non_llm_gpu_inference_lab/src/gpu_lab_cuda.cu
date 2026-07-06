@@ -1661,3 +1661,276 @@ OverlayHeavyAnalysis analyze_overlay_heavy_cuda(
 }
 
 } // namespace node1_non_llm
+
+namespace node1_non_llm {
+namespace {
+
+__global__ void audiobox_window_kernel(
+    const float* samples,
+    int sample_count,
+    int window_samples,
+    int windows,
+    float* rms,
+    float* peaks) {
+
+    const int w = blockIdx.x;
+    if (w >= windows) {
+        return;
+    }
+    extern __shared__ float scratch[];
+    float* scratch_sum = scratch;
+    float* scratch_peak = scratch + blockDim.x;
+
+    const int start = w * window_samples;
+    const int end = min(sample_count, start + window_samples);
+    float local_sum = 0.0f;
+    float local_peak = 0.0f;
+    for (int i = start + threadIdx.x; i < end; i += blockDim.x) {
+        const float v = samples[i];
+        local_sum += v * v;
+        local_peak = fmaxf(local_peak, fabsf(v));
+    }
+    scratch_sum[threadIdx.x] = local_sum;
+    scratch_peak[threadIdx.x] = local_peak;
+    __syncthreads();
+
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride) {
+            scratch_sum[threadIdx.x] += scratch_sum[threadIdx.x + stride];
+            scratch_peak[threadIdx.x] = fmaxf(scratch_peak[threadIdx.x], scratch_peak[threadIdx.x + stride]);
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+        const int n = max(1, end - start);
+        rms[w] = sqrtf(scratch_sum[0] / static_cast<float>(n));
+        peaks[w] = scratch_peak[0];
+    }
+}
+
+__global__ void audiobox_correlation_kernel(
+    const float* primary,
+    const float* reference,
+    int sample_count,
+    int max_lag,
+    float* scores) {
+
+    const int lag_index = blockIdx.x;
+    const int lag = lag_index - max_lag;
+
+    extern __shared__ float scratch[];
+    float* scratch_sum = scratch;
+    float* scratch_a2 = scratch + blockDim.x;
+    float* scratch_b2 = scratch + 2 * blockDim.x;
+
+    float local_sum = 0.0f;
+    float local_a2 = 0.0f;
+    float local_b2 = 0.0f;
+    for (int i = threadIdx.x; i < sample_count; i += blockDim.x) {
+        const int j = i + lag;
+        if (j < 0 || j >= sample_count) {
+            continue;
+        }
+        const float a = primary[i];
+        const float b = reference[j];
+        local_sum += a * b;
+        local_a2 += a * a;
+        local_b2 += b * b;
+    }
+    scratch_sum[threadIdx.x] = local_sum;
+    scratch_a2[threadIdx.x] = local_a2;
+    scratch_b2[threadIdx.x] = local_b2;
+    __syncthreads();
+
+    for (int stride = blockDim.x / 2; stride > 0; stride >>= 1) {
+        if (threadIdx.x < stride) {
+            scratch_sum[threadIdx.x] += scratch_sum[threadIdx.x + stride];
+            scratch_a2[threadIdx.x] += scratch_a2[threadIdx.x + stride];
+            scratch_b2[threadIdx.x] += scratch_b2[threadIdx.x + stride];
+        }
+        __syncthreads();
+    }
+    if (threadIdx.x == 0) {
+        const float denom = sqrtf(scratch_a2[0] * scratch_b2[0]);
+        scores[lag_index] = denom > 1.0e-20f ? scratch_sum[0] / denom : 0.0f;
+    }
+}
+
+void finalize_audiobox_cuda_host(AudioBoxAnalysis& out, const AudioBoxConfig& cfg) {
+    out.windows = static_cast<int>(out.rms.size());
+    out.silence_mask = 0U;
+    out.onset_mask = 0U;
+    out.silent_windows = 0;
+    out.active_windows = 0;
+    out.onset_count = 0;
+    out.mean_rms = 0.0f;
+    out.mean_peak = 0.0f;
+    out.max_rms = 0.0f;
+    out.max_peak = 0.0f;
+    for (int w = 0; w < out.windows; ++w) {
+        const float rms = out.rms[static_cast<std::size_t>(w)];
+        const float peak = out.peaks[static_cast<std::size_t>(w)];
+        out.mean_rms += rms;
+        out.mean_peak += peak;
+        out.max_rms = std::max(out.max_rms, rms);
+        out.max_peak = std::max(out.max_peak, peak);
+        if (rms <= cfg.silence_threshold) {
+            out.silence_mask |= (1U << w);
+            ++out.silent_windows;
+        } else {
+            ++out.active_windows;
+        }
+        const float previous = (w == 0) ? 0.0f : out.rms[static_cast<std::size_t>(w - 1)];
+        if (rms > cfg.silence_threshold && (w == 0 ? rms >= cfg.onset_threshold : (rms - previous) >= cfg.onset_threshold)) {
+            out.onset_mask |= (1U << w);
+            ++out.onset_count;
+        }
+    }
+    if (out.windows > 0) {
+        out.mean_rms /= static_cast<float>(out.windows);
+        out.mean_peak /= static_cast<float>(out.windows);
+    }
+
+    int best_lag = 0;
+    float best_abs = -1.0f;
+    float best_corr = 0.0f;
+    for (std::size_t i = 0; i < out.correlation_scores.size(); ++i) {
+        const float corr = out.correlation_scores[i];
+        const float abs_corr = fabsf(corr);
+        const int lag = static_cast<int>(i) - cfg.max_lag;
+        if (abs_corr > best_abs || (abs_corr == best_abs && std::abs(lag) < std::abs(best_lag))) {
+            best_abs = abs_corr;
+            best_corr = corr;
+            best_lag = lag;
+        }
+    }
+    out.sync_drift_samples = best_lag;
+    out.sync_drift_ms = 1000.0 * static_cast<double>(best_lag) / static_cast<double>(std::max(1, cfg.sample_rate));
+    out.sync_correlation = best_corr;
+    out.sync_correlation_abs = fabsf(best_corr);
+    out.correlation_lag_count = static_cast<int>(out.correlation_scores.size());
+}
+
+} // namespace
+
+AudioBoxAnalysis analyze_audiobox_cuda(
+    const float* primary_samples,
+    const float* reference_samples,
+    const AudioBoxConfig& cfg) {
+
+    HostStageTimer total_timer;
+    AudioBoxAnalysis out;
+    out.backend = "cuda";
+    out.samples = cfg.sample_count;
+    out.sample_rate = cfg.sample_rate;
+    out.window_samples = cfg.window_samples;
+    out.silence_threshold = cfg.silence_threshold;
+    out.onset_threshold = cfg.onset_threshold;
+    out.max_lag = cfg.max_lag;
+    out.bytes_read = static_cast<std::uint64_t>(cfg.sample_count) * sizeof(float) * 2ULL;
+
+    std::string error;
+    if (!validate_audiobox_config(cfg, error)) {
+        out.error = error;
+        out.timing.total_ms = total_timer.elapsed_ms();
+        return out;
+    }
+    if (primary_samples == nullptr || reference_samples == nullptr) {
+        out.error = "primary_samples and reference_samples must not be null";
+        out.timing.total_ms = total_timer.elapsed_ms();
+        return out;
+    }
+
+    const int windows = std::min(cfg.max_windows, (cfg.sample_count + cfg.window_samples - 1) / cfg.window_samples);
+    const int lag_count = 2 * cfg.max_lag + 1;
+    const std::size_t sample_bytes = static_cast<std::size_t>(cfg.sample_count) * sizeof(float);
+    const std::size_t window_bytes = static_cast<std::size_t>(windows) * sizeof(float);
+    const std::size_t corr_bytes = static_cast<std::size_t>(lag_count) * sizeof(float);
+
+    float* d_primary = nullptr;
+    float* d_reference = nullptr;
+    float* d_rms = nullptr;
+    float* d_peaks = nullptr;
+    float* d_corr = nullptr;
+
+    auto cleanup = [&]() noexcept {
+        cudaFree(d_primary);
+        cudaFree(d_reference);
+        cudaFree(d_rms);
+        cudaFree(d_peaks);
+        cudaFree(d_corr);
+    };
+
+    cudaError_t err = cudaMalloc(&d_primary, std::max<std::size_t>(sample_bytes, 1U));
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMalloc audiobox primary"); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    err = cudaMalloc(&d_reference, std::max<std::size_t>(sample_bytes, 1U));
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMalloc audiobox reference"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    err = cudaMalloc(&d_rms, std::max<std::size_t>(window_bytes, 1U));
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMalloc audiobox rms"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    err = cudaMalloc(&d_peaks, std::max<std::size_t>(window_bytes, 1U));
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMalloc audiobox peaks"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    err = cudaMalloc(&d_corr, std::max<std::size_t>(corr_bytes, 1U));
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMalloc audiobox correlation"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+
+    {
+        HostStageTimer h2d_timer;
+        err = cudaMemcpy(d_primary, primary_samples, sample_bytes, cudaMemcpyHostToDevice);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy audiobox primary"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemcpy(d_reference, reference_samples, sample_bytes, cudaMemcpyHostToDevice);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy audiobox reference"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemset(d_rms, 0, std::max<std::size_t>(window_bytes, 1U));
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemset audiobox rms"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemset(d_peaks, 0, std::max<std::size_t>(window_bytes, 1U));
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemset audiobox peaks"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemset(d_corr, 0, std::max<std::size_t>(corr_bytes, 1U));
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemset audiobox correlation"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        out.timing.h2d_ms = h2d_timer.elapsed_ms();
+    }
+
+    CudaEventTimer kernel_timer;
+    if (kernel_timer.ok()) {
+        err = kernel_timer.start();
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaEventRecord audiobox start"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    }
+    const int threads = 256;
+    audiobox_window_kernel<<<windows, threads, static_cast<std::size_t>(threads) * 2U * sizeof(float)>>>(
+        d_primary, cfg.sample_count, cfg.window_samples, windows, d_rms, d_peaks);
+    err = cudaGetLastError();
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "audiobox_window_kernel launch"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    audiobox_correlation_kernel<<<lag_count, threads, static_cast<std::size_t>(threads) * 3U * sizeof(float)>>>(
+        d_primary, d_reference, cfg.sample_count, cfg.max_lag, d_corr);
+    err = cudaGetLastError();
+    if (err != cudaSuccess) { out.error = cuda_error_message(err, "audiobox_correlation_kernel launch"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    if (kernel_timer.ok()) {
+        err = kernel_timer.stop(out.timing.kernel_ms);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "audiobox CUDA event sync"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    } else {
+        HostStageTimer sync_timer;
+        err = cudaDeviceSynchronize();
+        out.timing.kernel_ms = sync_timer.elapsed_ms();
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "audiobox CUDA sync"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+    }
+
+    out.rms.assign(static_cast<std::size_t>(windows), 0.0f);
+    out.peaks.assign(static_cast<std::size_t>(windows), 0.0f);
+    out.correlation_scores.assign(static_cast<std::size_t>(lag_count), 0.0f);
+    {
+        HostStageTimer d2h_timer;
+        err = cudaMemcpy(out.rms.data(), d_rms, window_bytes, cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy audiobox rms"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemcpy(out.peaks.data(), d_peaks, window_bytes, cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy audiobox peaks"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        err = cudaMemcpy(out.correlation_scores.data(), d_corr, corr_bytes, cudaMemcpyDeviceToHost);
+        if (err != cudaSuccess) { out.error = cuda_error_message(err, "cudaMemcpy audiobox correlation"); cleanup(); out.timing.total_ms = total_timer.elapsed_ms(); return out; }
+        out.timing.d2h_ms = d2h_timer.elapsed_ms();
+    }
+
+    finalize_audiobox_cuda_host(out, cfg);
+    out.bytes_written = static_cast<std::uint64_t>(out.rms.size() + out.peaks.size() + out.correlation_scores.size()) * sizeof(float);
+    out.ok = true;
+    out.timing.total_ms = total_timer.elapsed_ms();
+    cleanup();
+    return out;
+}
+
+} // namespace node1_non_llm

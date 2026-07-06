@@ -395,6 +395,47 @@ class Node1NonLLMGpuLabRunner:
         result["binary_path"] = str(binary)
         return result
 
+
+    def run_audiobox_synthetic(
+        self,
+        *,
+        audio_samples: int = 32768,
+        sample_rate: int = 48000,
+        window_samples: int = 1024,
+        silence_threshold: float = 0.02,
+        onset_threshold: float = 0.08,
+        max_windows: int = 32,
+        max_lag: int = 128,
+        sync_drift_samples: int = 64,
+    ) -> dict[str, Any]:
+        binary = self.binary_path
+        if not binary.exists():
+            return {
+                "ok": False,
+                "schema": GPU_LAB_SCHEMA,
+                "error": f"native binary not found: {binary}",
+                "binary_path": str(binary),
+            }
+        cmd = [
+            str(binary),
+            "--mode", "audiobox-synthetic",
+            "--audio-samples", str(audio_samples),
+            "--sample-rate", str(sample_rate),
+            "--audio-window-samples", str(window_samples),
+            "--silence-threshold", str(silence_threshold),
+            "--onset-threshold", str(onset_threshold),
+            "--audio-max-windows", str(max_windows),
+            "--max-lag", str(max_lag),
+            "--sync-drift-samples", str(sync_drift_samples),
+        ]
+        if self.config.prefer_cuda:
+            cmd.append("--gpu")
+        result = self._run_json(cmd)
+        result["schema"] = GPU_LAB_SCHEMA
+        result["source"] = "native_binary"
+        result["binary_path"] = str(binary)
+        return result
+
     def run_isp_synthetic(self, *, filter_name: str = "sobel-mag", width: int = 64, height: int = 48) -> dict[str, Any]:
         binary = self.binary_path
         if not binary.exists():

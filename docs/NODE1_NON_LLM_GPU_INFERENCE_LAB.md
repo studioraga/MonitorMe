@@ -665,3 +665,51 @@ This module is intentionally non-semantic. It emits only overlay workload,
 heatmap, thumbnail, before/after comparison, and timing facts. It does not
 report object class, person, identity, behavior, intent, weapon, or
 suspiciousness claims.
+
+## Phase 7 — AudioBox path
+
+Phase 7 implements the AudioBox processing path from the TASK1 roadmap. It is a facts-only audio signal workload that measures numeric signal properties without transcribing speech or making identity, behavior, or intent claims.
+
+Implemented operations:
+
+```text
+primary/reference float32 audio
+  -> per-window RMS
+  -> per-window peak
+  -> silence mask
+  -> onset mask
+  -> bounded cross-correlation
+  -> sync drift in samples and milliseconds
+```
+
+Native mode:
+
+```bash
+node1_non_llm_gpu_lab \
+  --mode audiobox-synthetic \
+  --audio-samples 32768 \
+  --sample-rate 48000 \
+  --audio-window-samples 1024 \
+  --audio-max-windows 32 \
+  --silence-threshold 0.02 \
+  --onset-threshold 0.08 \
+  --max-lag 128 \
+  --sync-drift-samples 64 \
+  --gpu \
+  --include-output
+```
+
+JSON fields:
+
+```text
+audiobox                         CPU reference AudioBox result
+audiobox_cuda                    CUDA AudioBox result when --gpu is used
+audiobox_cpu_cuda_comparison     CPU-vs-CUDA parity facts
+```
+
+The comparison object validates RMS, peak, silence/onset masks, correlation scores, drift samples, drift milliseconds, and aggregate metrics. The selftest scripts are:
+
+```text
+native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase7_audiobox_selftest.sh
+native/node1_non_llm_gpu_inference_lab/scripts/run_node1_gpu_lab_phase7_audiobox_cuda_selftest.sh
+```

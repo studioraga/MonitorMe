@@ -6,6 +6,7 @@
 #include "node1_non_llm/mixed_region.hpp"
 #include "node1_non_llm/dense_full_frame.hpp"
 #include "node1_non_llm/overlay_heavy.hpp"
+#include "node1_non_llm/audiobox.hpp"
 
 #include <cstdint>
 #include <string>
@@ -30,5 +31,7 @@ std::string dense_full_frame_analysis_json(const DenseFullFrameAnalysis& analysi
 std::string dense_full_frame_cpu_cuda_comparison_json(const DenseFullFrameAnalysis& cpu, const DenseFullFrameAnalysis& cuda);
 std::string overlay_heavy_analysis_json(const OverlayHeavyAnalysis& analysis, bool include_output = false);
 std::string overlay_heavy_cpu_cuda_comparison_json(const OverlayHeavyAnalysis& cpu, const OverlayHeavyAnalysis& cuda);
+std::string audiobox_analysis_json(const AudioBoxAnalysis& analysis, bool include_output = false);
+std::string audiobox_cpu_cuda_comparison_json(const AudioBoxAnalysis& cpu, const AudioBoxAnalysis& cuda);
 
 } // namespace node1_non_llm

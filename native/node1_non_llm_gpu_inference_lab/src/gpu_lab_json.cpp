@@ -674,3 +674,121 @@ std::string overlay_heavy_cpu_cuda_comparison_json(const OverlayHeavyAnalysis& c
 }
 
 } // namespace node1_non_llm
+
+namespace node1_non_llm {
+
+std::string audiobox_analysis_json(const AudioBoxAnalysis& a, bool include_output) {
+    std::ostringstream os;
+    os << "{";
+    os << "\"ok\":" << bool_json(a.ok) << ",";
+    os << "\"backend\":\"" << json_escape(a.backend) << "\",";
+    os << "\"schema\":\"" << json_escape(a.schema) << "\",";
+    os << "\"error\":\"" << json_escape(a.error) << "\",";
+    os << "\"samples\":" << a.samples << ",";
+    os << "\"sample_rate\":" << a.sample_rate << ",";
+    os << "\"window_samples\":" << a.window_samples << ",";
+    os << "\"windows\":" << a.windows << ",";
+    os << "\"silence_threshold\":" << a.silence_threshold << ",";
+    os << "\"onset_threshold\":" << a.onset_threshold << ",";
+    os << "\"max_lag\":" << a.max_lag << ",";
+    os << "\"silence_mask\":" << a.silence_mask << ",";
+    os << "\"silence_mask_hex\":\"" << hex32(a.silence_mask) << "\",";
+    os << "\"onset_mask\":" << a.onset_mask << ",";
+    os << "\"onset_mask_hex\":\"" << hex32(a.onset_mask) << "\",";
+    os << "\"silent_windows\":" << a.silent_windows << ",";
+    os << "\"active_windows\":" << a.active_windows << ",";
+    os << "\"onset_count\":" << a.onset_count << ",";
+    os << "\"mean_rms\":" << a.mean_rms << ",";
+    os << "\"max_rms\":" << a.max_rms << ",";
+    os << "\"mean_peak\":" << a.mean_peak << ",";
+    os << "\"max_peak\":" << a.max_peak << ",";
+    os << "\"sync_drift_samples\":" << a.sync_drift_samples << ",";
+    os << "\"sync_drift_ms\":" << a.sync_drift_ms << ",";
+    os << "\"sync_correlation\":" << a.sync_correlation << ",";
+    os << "\"sync_correlation_abs\":" << a.sync_correlation_abs << ",";
+    os << "\"correlation_lag_count\":" << a.correlation_lag_count << ",";
+    os << "\"bytes_read\":" << a.bytes_read << ",";
+    os << "\"bytes_written\":" << a.bytes_written << ",";
+    os << "\"facts_only\":true,";
+    os << "\"note\":\"AudioBox RMS, peak, silence, onset, and cross-correlation sync-drift workload metrics only; no speech content, speaker identity, behavior, or intent claim is emitted.\",";
+    os << "\"timing\":" << stage_timing_json(a.timing);
+    os << ",\"rms\":" << float_vector_json(a.rms);
+    os << ",\"peaks\":" << float_vector_json(a.peaks);
+    if (include_output) {
+        os << ",\"correlation_scores\":" << float_vector_json(a.correlation_scores);
+    }
+    os << "}";
+    return os.str();
+}
+
+std::string audiobox_cpu_cuda_comparison_json(const AudioBoxAnalysis& cpu, const AudioBoxAnalysis& cuda) {
+    std::size_t mismatch_count = 0;
+    double max_abs_diff = 0.0;
+    auto compare_float = [&](const std::vector<float>& a, const std::vector<float>& b, double tolerance) {
+        bool close = a.size() == b.size();
+        if (a.size() != b.size()) {
+            mismatch_count += std::max(a.size(), b.size());
+            max_abs_diff = std::max(max_abs_diff, 1.0);
+            return false;
+        }
+        for (std::size_t i = 0; i < a.size(); ++i) {
+            const double diff = std::abs(static_cast<double>(a[i]) - static_cast<double>(b[i]));
+            max_abs_diff = std::max(max_abs_diff, diff);
+            if (diff > tolerance) {
+                close = false;
+                ++mismatch_count;
+            }
+        }
+        return close;
+    };
+    const bool rms_close = compare_float(cpu.rms, cuda.rms, 1e-5);
+    const bool peaks_close = compare_float(cpu.peaks, cuda.peaks, 1e-6);
+    const bool correlation_close = compare_float(cpu.correlation_scores, cuda.correlation_scores, 1e-4);
+    const double mean_rms_abs_diff = std::abs(static_cast<double>(cpu.mean_rms) - static_cast<double>(cuda.mean_rms));
+    const double max_rms_abs_diff = std::abs(static_cast<double>(cpu.max_rms) - static_cast<double>(cuda.max_rms));
+    const double mean_peak_abs_diff = std::abs(static_cast<double>(cpu.mean_peak) - static_cast<double>(cuda.mean_peak));
+    const double max_peak_abs_diff = std::abs(static_cast<double>(cpu.max_peak) - static_cast<double>(cuda.max_peak));
+    const double sync_correlation_abs_diff = std::abs(static_cast<double>(cpu.sync_correlation) - static_cast<double>(cuda.sync_correlation));
+    const double sync_drift_ms_abs_diff = std::abs(cpu.sync_drift_ms - cuda.sync_drift_ms);
+    const bool masks_equal = cpu.silence_mask == cuda.silence_mask && cpu.onset_mask == cuda.onset_mask;
+    const bool drift_equal = cpu.sync_drift_samples == cuda.sync_drift_samples;
+    const bool metrics_close = masks_equal
+        && drift_equal
+        && cpu.silent_windows == cuda.silent_windows
+        && cpu.active_windows == cuda.active_windows
+        && cpu.onset_count == cuda.onset_count
+        && mean_rms_abs_diff <= 1e-5
+        && max_rms_abs_diff <= 1e-5
+        && mean_peak_abs_diff <= 1e-6
+        && max_peak_abs_diff <= 1e-6
+        && sync_correlation_abs_diff <= 1e-4
+        && sync_drift_ms_abs_diff <= 1e-9;
+
+    std::ostringstream os;
+    os << "{";
+    os << "\"ok\":" << bool_json(cpu.ok && cuda.ok && rms_close && peaks_close && correlation_close && metrics_close) << ",";
+    os << "\"schema\":\"node1_non_llm_audiobox_cpu_cuda_compare.v0.1\",";
+    os << "\"rms_close\":" << bool_json(rms_close) << ",";
+    os << "\"peaks_close\":" << bool_json(peaks_close) << ",";
+    os << "\"correlation_close\":" << bool_json(correlation_close) << ",";
+    os << "\"masks_equal\":" << bool_json(masks_equal) << ",";
+    os << "\"drift_equal\":" << bool_json(drift_equal) << ",";
+    os << "\"metrics_close\":" << bool_json(metrics_close) << ",";
+    os << "\"mismatch_count\":" << mismatch_count << ",";
+    os << "\"max_abs_diff\":" << max_abs_diff << ",";
+    os << "\"silence_mask_equal\":" << bool_json(cpu.silence_mask == cuda.silence_mask) << ",";
+    os << "\"onset_mask_equal\":" << bool_json(cpu.onset_mask == cuda.onset_mask) << ",";
+    os << "\"sync_drift_samples_cpu\":" << cpu.sync_drift_samples << ",";
+    os << "\"sync_drift_samples_cuda\":" << cuda.sync_drift_samples << ",";
+    os << "\"mean_rms_abs_diff\":" << mean_rms_abs_diff << ",";
+    os << "\"max_rms_abs_diff\":" << max_rms_abs_diff << ",";
+    os << "\"mean_peak_abs_diff\":" << mean_peak_abs_diff << ",";
+    os << "\"max_peak_abs_diff\":" << max_peak_abs_diff << ",";
+    os << "\"sync_correlation_abs_diff\":" << sync_correlation_abs_diff << ",";
+    os << "\"sync_drift_ms_abs_diff\":" << sync_drift_ms_abs_diff << ",";
+    os << "\"facts_only\":true";
+    os << "}";
+    return os.str();
+}
+
+} // namespace node1_non_llm

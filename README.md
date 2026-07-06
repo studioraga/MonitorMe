@@ -899,3 +899,13 @@ Use `MONITORME_GPU_LAB_PREFER_CUDA=1` with a CUDA-built native binary to emit
 `overlay_heavy_cuda` and `overlay_heavy_cpu_cuda_comparison`. The overlay-heavy
 path remains facts-only workload metadata and does not emit object, person,
 identity, behavior, intent, weapon, or suspiciousness claims.
+
+### Node1 non-LLM GPU lab Phase 7
+
+Phase 7 adds the AudioBox path for facts-only audio signal processing. It computes per-window RMS, peak, silence masks, onset masks, and bounded cross-correlation sync drift between a primary and reference track. The native mode is:
+
+```bash
+python -m monitor_me.cli gpu-lab-audiobox-synthetic --sync-drift-samples 64
+```
+
+When the CUDA build is available and `MONITORME_GPU_LAB_PREFER_CUDA=1`, the result includes `audiobox`, `audiobox_cuda`, and `audiobox_cpu_cuda_comparison`. The AudioBox path reports signal metrics only and does not infer speech content, speaker identity, behavior, or intent.

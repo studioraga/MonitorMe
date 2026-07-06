@@ -128,6 +128,40 @@ void make_synthetic_frames(
     }
 }
 
+
+void make_synthetic_audiobox(
+    int sample_count,
+    int drift_samples,
+    std::vector<float>& primary,
+    std::vector<float>& reference) {
+
+    if (sample_count <= 0) {
+        throw std::runtime_error("audio-samples must be positive");
+    }
+    primary.assign(static_cast<std::size_t>(sample_count), 0.0f);
+    reference.assign(static_cast<std::size_t>(sample_count), 0.0f);
+
+    auto paint_burst = [&](int start, int length, float amplitude) {
+        const int end = std::min(sample_count, start + length);
+        for (int i = std::max(0, start); i < end; ++i) {
+            const int phase = (i - start) % 17;
+            const float shaped = amplitude * (0.65f + 0.02f * static_cast<float>(phase));
+            primary[static_cast<std::size_t>(i)] = (phase & 1) ? shaped : -shaped;
+        }
+    };
+
+    paint_burst(sample_count / 5, sample_count / 20, 0.28f);
+    paint_burst(sample_count / 2, sample_count / 16, 0.42f);
+    paint_burst((sample_count * 3) / 4, sample_count / 24, 0.36f);
+
+    for (int i = 0; i < sample_count; ++i) {
+        const int j = i + drift_samples;
+        if (j >= 0 && j < sample_count) {
+            reference[static_cast<std::size_t>(j)] = primary[static_cast<std::size_t>(i)];
+        }
+    }
+}
+
 std::vector<float> make_synthetic_audio(int sample_count) {
     if (sample_count < 0) {
         throw std::runtime_error("audio-samples must be non-negative");
@@ -145,10 +179,11 @@ std::vector<float> make_synthetic_audio(int sample_count) {
 }
 
 void print_usage() {
-    std::cerr << "node1_non_llm_gpu_lab --mode synthetic|analyze-raw-gray|audio-raw-f32|isp-synthetic|isp-pgm|sparse-roi-synthetic|mixed-region-synthetic|dense-full-frame-synthetic|overlay-heavy-synthetic [options]\n"
+    std::cerr << "node1_non_llm_gpu_lab --mode synthetic|analyze-raw-gray|audio-raw-f32|isp-synthetic|isp-pgm|sparse-roi-synthetic|mixed-region-synthetic|dense-full-frame-synthetic|overlay-heavy-synthetic|audiobox-synthetic [options]\n"
               << "  --scenario sparse|mixed|dense|contiguous|scattered synthetic frame pattern\n"
               << "  --prev previous.gray --curr current.gray --width W --height H\n"
               << "  --audio samples.f32 --audio-samples N --audio-window-samples N\n"
+              << "  --sample-rate N --silence-threshold F --onset-threshold F --max-lag N --sync-drift-samples N\n"
               << "  --isp-filter blur|sharpen|edge|sobel-x|sobel-y|sobel-mag\n"
               << "  --input frame.pgm|frame.ppm --output filtered.pgm|filtered.ppm\n"
               << "  --target-width N --target-height N    ROI/mixed-region resize target dimensions\n"
@@ -215,7 +250,7 @@ int main(int argc, char** argv) {
             make_synthetic_frames(width, height, arg_string(args, "scenario", "mixed"), prev, curr);
             cpu_frame = analyze_gray_frames_cpu(prev.data(), curr.data(), tile_cfg);
             ran_frame = true;
-        } else if (mode != "audio-raw-f32" && mode != "isp-synthetic" && mode != "isp-pgm") {
+        } else if (mode != "audio-raw-f32" && mode != "audiobox-synthetic" && mode != "isp-synthetic" && mode != "isp-pgm") {
             throw std::runtime_error("unknown mode: " + mode);
         }
 
@@ -246,6 +281,38 @@ int main(int argc, char** argv) {
             }
 #endif
             ran_audio = true;
+        }
+
+        AudioBoxAnalysis cpu_audiobox;
+        AudioBoxAnalysis gpu_audiobox;
+        bool ran_audiobox = false;
+        bool ran_audiobox_cuda = false;
+        if (mode == "audiobox-synthetic") {
+            AudioBoxConfig audiobox_cfg;
+            audiobox_cfg.sample_count = arg_int(args, "audio-samples", 32768);
+            audiobox_cfg.sample_rate = arg_int(args, "sample-rate", 48000);
+            audiobox_cfg.window_samples = arg_int(args, "audio-window-samples", 1024);
+            audiobox_cfg.silence_threshold = arg_float(args, "silence-threshold", 0.02f);
+            audiobox_cfg.onset_threshold = arg_float(args, "onset-threshold", 0.08f);
+            audiobox_cfg.max_windows = arg_int(args, "audio-max-windows", 32);
+            audiobox_cfg.max_lag = arg_int(args, "max-lag", 128);
+            audiobox_cfg.collect_output = true;
+
+            std::vector<float> primary_samples;
+            std::vector<float> reference_samples;
+            make_synthetic_audiobox(
+                audiobox_cfg.sample_count,
+                arg_int(args, "sync-drift-samples", 64),
+                primary_samples,
+                reference_samples);
+            cpu_audiobox = analyze_audiobox_cpu(primary_samples.data(), reference_samples.data(), audiobox_cfg);
+            ran_audiobox = true;
+#ifdef NODE1_NON_LLM_WITH_CUDA
+            if (has_flag(args, "gpu")) {
+                gpu_audiobox = analyze_audiobox_cuda(primary_samples.data(), reference_samples.data(), audiobox_cfg);
+                ran_audiobox_cuda = true;
+            }
+#endif
         }
 
 
@@ -401,6 +468,7 @@ int main(int argc, char** argv) {
         (void)ran_mixed_region_cuda;
         (void)ran_dense_full_frame_cuda;
         (void)ran_overlay_heavy_cuda;
+        (void)ran_audiobox_cuda;
 #endif
         std::ostringstream os;
         os << "{";
@@ -469,6 +537,15 @@ int main(int argc, char** argv) {
 #else
         os << ",\"overlay_heavy_cuda\":null";
         os << ",\"overlay_heavy_cpu_cuda_comparison\":null";
+#endif
+        const bool include_audiobox_output = has_flag(args, "include-output");
+        os << ",\"audiobox\":" << (ran_audiobox ? audiobox_analysis_json(cpu_audiobox, include_audiobox_output) : "null");
+#ifdef NODE1_NON_LLM_WITH_CUDA
+        os << ",\"audiobox_cuda\":" << (ran_audiobox_cuda ? audiobox_analysis_json(gpu_audiobox, include_audiobox_output) : "null");
+        os << ",\"audiobox_cpu_cuda_comparison\":" << (ran_audiobox_cuda ? audiobox_cpu_cuda_comparison_json(cpu_audiobox, gpu_audiobox) : "null");
+#else
+        os << ",\"audiobox_cuda\":null";
+        os << ",\"audiobox_cpu_cuda_comparison\":null";
 #endif
         if (ran_isp) {
 

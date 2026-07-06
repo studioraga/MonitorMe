@@ -412,3 +412,37 @@ The JSON emits `overlay_heavy` for the CPU reference path,
 `overlay_heavy_cpu_cuda_comparison` for parity facts. The module remains
 facts-only workload metadata; it does not claim object identity, behavior,
 intent, weapons, or suspicious activity.
+
+## Phase 7 — AudioBox path
+
+The Phase 7 AudioBox path adds facts-only audio signal analysis:
+
+```text
+RMS -> peak -> silence mask -> onset mask -> cross-correlation sync drift
+```
+
+CPU validation:
+
+```bash
+./scripts/run_node1_gpu_lab_phase7_audiobox_selftest.sh
+```
+
+CUDA validation after `./scripts/build_node1_gpu_lab.sh`:
+
+```bash
+./scripts/run_node1_gpu_lab_phase7_audiobox_cuda_selftest.sh
+```
+
+Manual run:
+
+```bash
+./build/node1_non_llm_gpu_lab \
+  --mode audiobox-synthetic \
+  --audio-samples 32768 \
+  --sample-rate 48000 \
+  --audio-window-samples 1024 \
+  --max-lag 128 \
+  --sync-drift-samples 64 \
+  --gpu \
+  --include-output
+```
